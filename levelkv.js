@@ -13,19 +13,19 @@
 		constructor(){
 			PROP_MAP[this] = {};
 		}
-		open() {
+		async open(dir, options={bson:true}) {
 		
 		}
-		close() {
+		async close() {
 		
 		}
 		get() {
 		
 		}
-		put() {
+		async put() {
 		
 		}
-		del() {
+		async del() {
 		
 		}
 	}
