@@ -8,7 +8,7 @@
 	},
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/JCloudYu/leveld.git"
+		"url": "git+https://github.com/JCloudYu/levelkv.git"
 	},
 	"keywords": [
 		"LevelDB",
@@ -17,7 +17,7 @@
 	"author": "JCloudYu",
 	"license": "WTFPL",
 	"bugs": {
-		"url": "https://github.com/JCloudYu/leveld/issues"
+		"url": "https://github.com/JCloudYu/levelkv/issues"
 	},
-	"homepage": "https://github.com/JCloudYu/leveld#readme"
+	"homepage": "https://github.com/JCloudYu/levelkv#readme"
 }

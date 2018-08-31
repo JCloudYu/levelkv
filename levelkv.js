@@ -1,6 +1,6 @@
 /**
- * Project: leveld
- * File: leveld.js
+ * Project: levelkv
+ * File: levelkv.js
  * Author: JCloudYu
  * Create Date: Aug. 31, 2018 
  */
@@ -8,7 +8,8 @@
 	"use strict";
 	
 	/*
-		let db = await leveld();
+		const levelkv = require('levelkv');
+		let db = await levelkv();
 		await db.open()
 		await db.close()
 		await db.put()
