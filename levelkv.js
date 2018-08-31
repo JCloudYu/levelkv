@@ -7,26 +7,35 @@
 (()=>{
 	"use strict";
 	
+	const DEFAULT_JSON_DB = require( './levelkv-json' );
+	const DEFAULT_BSON_DB = require( './levelkv-bson' );
+	
 	
 	const PROP_MAP = new WeakMap();
 	class LevelKV {
 		constructor(){
 			PROP_MAP[this] = {};
 		}
-		async open(dir, options={bson:true}) {
-		
+		async open(dir, options={type:'json'}) {
+			const PROPS = PROP_MAP.get(this);
+			PROPS.db = new ((options.type === 'json') ? DEFAULT_BSON_DB : DEFAULT_JSON_DB)();
+			return PROPS.db.open(dir, options);
 		}
 		async close() {
-		
+			const PROPS = PROP_MAP.get(this);
+			return PROPS.db.close();
 		}
-		get() {
-		
+		async get(query=null) {
+			const PROPS = PROP_MAP.get(this);
+			return PROPS.db.get(query);
 		}
-		async put() {
-		
+		async put(query=null, content={}) {
+			const PROPS = PROP_MAP.get(this);
+			return PROPS.db.put(query, content);
 		}
-		async del() {
-		
+		async del(query=null) {
+			const PROPS = PROP_MAP.get(this);
+			return PROPS.db.del(query);
 		}
 	}
 	module.exports=LevelKV;

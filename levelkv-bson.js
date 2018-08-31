@@ -8,19 +8,22 @@
 	"use strict";
 	
 	class LevelKV_DB_BSON {
-		constructor(dir, options={}){
+		constructor(){
+		
+		}
+		async open(dir, options={}) {
 		
 		}
 		async close() {
 		
 		}
-		get() {
+		async get(query=null) {
 		
 		}
-		async put() {
+		async put(query=null, content={}) {
 		
 		}
-		async del() {
+		async del(query=null) {
 		
 		}
 	}
