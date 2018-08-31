@@ -7,6 +7,33 @@
 (()=>{
 	"use strict";
 	
+	
+	const PROP_MAP = new WeakMap();
+	class LevelKV {
+		constructor(){
+			PROP_MAP[this] = {};
+		}
+		open() {
+		
+		}
+		close() {
+		
+		}
+		get() {
+		
+		}
+		put() {
+		
+		}
+		del() {
+		
+		}
+	}
+	module.exports=LevelKV;
+	
+	
+	
+	
 	/*
 		const levelkv = require('levelkv');
 		let db = await levelkv();
@@ -14,7 +41,6 @@
 		await db.close()
 		await db.put()
 		await db.del()
-		await db.batch()
 		
 		let iterator = await db.get()
 		await iterator.next()
@@ -22,6 +48,7 @@
 		await iterator.end()
 		
 		
+		db.batch()
 		db.approximateSize()
 		db.compactRange()
 		db.getProperty()
