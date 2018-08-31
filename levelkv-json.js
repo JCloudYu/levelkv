@@ -1,28 +1,50 @@
-/**
- * Project: levelkv
- * File: levelkv-json
- * Author: JCloudYu
- * Create Date: Aug. 31, 2018 
- */
 (()=>{
-	"use strict";
-	
-	class LevelKV_DB_JSON {
-		constructor(dir, options={}){
-		
-		}
-		async close() {
-		
-		}
-		get() {
-		
-		}
-		async put() {
-		
-		}
-		async del() {
-		
-		}
-	}
-	module.exports=LevelKV_DB_JSON;
+    'use strict';
+
+    const fs = require('fs');
+
+    class LevelKV_DB_JSON {
+        constructor(){
+        }
+
+        /*
+        * @async
+        * @param {string} dir
+        * @param {object} options
+        */
+        async open(dir, options={}) {
+        }
+
+        /*
+        * @async
+        */
+        async close() {
+        }
+
+        /*
+        * @async
+        * @param {string | [string, ...]} query
+        * @return {cursor}
+        */
+        async get(query=[]) {
+            const a = "123";
+        }
+
+        /*
+        * @async
+        * @param {string | [string, ...]} query
+        * @param {object} content
+        */
+        async put(query=[], content={}) {
+        }
+
+        /*
+        * @async
+        * @param {string | [string, ...]} query
+        */
+        async del(query=[]) {
+        }
+    }
+
+    module.exports = LevelKV_DB_JSON;
 })();
