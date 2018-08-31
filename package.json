@@ -1,0 +1,23 @@
+{
+  "name": "leveld",
+  "version": "0.1.0",
+  "description": "A very simple level db native nodejs implementation",
+  "main": "leveld.js",
+  "scripts": {
+    "test": "node ./test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JCloudYu/leveld.git"
+  },
+  "keywords": [
+    "LevelDB",
+    "Database"
+  ],
+  "author": "JCloudYu",
+  "license": "WTFPL",
+  "bugs": {
+    "url": "https://github.com/JCloudYu/leveld/issues"
+  },
+  "homepage": "https://github.com/JCloudYu/leveld#readme"
+}
