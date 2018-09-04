@@ -1,6 +1,8 @@
 .DS_Store
 Thumbs.db
-.vs_code
+.vscode
 .idea
+.eslintrc.json
+package-lock.json
 
 node_modules
