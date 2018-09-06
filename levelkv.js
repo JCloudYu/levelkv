@@ -98,7 +98,7 @@
 		
 		async del(keys=[]) {
 			if ( !Array.isArray(keys) ) { keys = [keys]; }
-			const {index, state} = _LevelKV.get(this);\
+			const {index, state} = _LevelKV.get(this);
 			for( let key of keys ) {
 				if ( index[key] ) {
 					state.storage.fragments.push(index[key]);
