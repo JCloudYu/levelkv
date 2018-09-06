@@ -181,44 +181,48 @@
 	
 	
 	function ___READ_INDEX(segment_count, segd_fd, index_fd) {
-		let rLen, buff = Buffer.alloc(9), segd_pos=0;
-		
+		let rLen, buff = Buffer.alloc(9), segd_pos = 0, LOOP = 0, prev = null;
+
 		const result = {};
 		while(LOOP < segment_count) {
 			rLen = fs.readSync(segd_fd, buff, 0, 9, segd_pos);
 			if ( rLen !== 9 ) {
 				throw "Insufficient data in index segmentation descriptor!";
 			}
-			
+
 			if ( !prev ) {
 				prev = Buffer.alloc(9);
 			}
 			else
 			if ( prev[8] ) {
-				let pos = prev.readDoubleLE(0);
-				let length = buff.readDoubleLE(0) - pos;
-				
-				let raw_index = Buffer.alloc(length);
-				rLen = fs.readSync(index_fd, raw_index, length, pos);
-				if ( rLen !== 9 ) {
+				let pos 		= prev.readDoubleLE(0);
+				let length 		= buff.readDoubleLE(0) - pos;
+
+				let raw_index 	= Buffer.alloc(length);
+				rLen 			= fs.readSync(index_fd, raw_index, 0, length, pos);
+				if ( rLen !== length ) {
 					throw "Insufficient data in index!";
 				}
-				
-				let { key, position, len } = Buffer.toJSON();
+
+
+				let indexStr = raw_index.toString();
+				let { 0:key, 1:position, 2:len } = JSON.parse( indexStr.slice(0, indexStr.length - 1) );
+
 				result[key] = {pos:position, length:len};
 			}
-		
-			
-			
+
+
+
 			let tmp = prev;
 			prev = buff;
 			buff = tmp;
-			
+
 			segd_pos += 9;
 			LOOP++;
 		}
-		
-		
+
+
+		return result;
 	}
 	async function ___WRITE_INDEX(index_path, index) {
 	
