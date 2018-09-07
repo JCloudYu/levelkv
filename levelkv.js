@@ -143,7 +143,7 @@
 			try {
 				PROPS.index_segd_fd = fs.openSync( PROPS.index_segd_path, "a+" );
 				PROPS.index_fd = fs.openSync( PROPS.index_path, "a+" );
-				PROPS.index = ___READ_INDEX( PROPS.state.index.segments, PROPS.index_segd_fd, PROPS.index_fd );
+				PROPS.index = ___READ_INDEX( PROPS.index_segd_fd, PROPS.index_fd );
 			}
 			catch(e) {
 				/*
@@ -180,21 +180,23 @@
 	
 	
 	
-	function ___READ_INDEX(segment_count, segd_fd, index_fd) {
-		let rLen, buff = Buffer.alloc(9), segd_pos = 0, LOOP = 0, prev = null;
+	function ___READ_INDEX(segd_fd, index_fd) {
+		const SEGMENT_DESCRIPTOR_LENGTH = 9;
+		const segd_size = fs.fstatSync(segd_fd).size;
+		let rLen, buff = Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH), segd_pos = 0, prev = null;
 
 		const result = {};
-		while(LOOP < segment_count) {
-			rLen = fs.readSync(segd_fd, buff, 0, 9, segd_pos);
+		while(segd_pos < segd_size) {
+			rLen = fs.readSync(segd_fd, buff, 0, SEGMENT_DESCRIPTOR_LENGTH, segd_pos);
 			if ( rLen !== 9 ) {
 				throw "Insufficient data in index segmentation descriptor!";
 			}
 
 			if ( !prev ) {
-				prev = Buffer.alloc(9);
+				prev = Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH);
 			}
 			else
-			if ( prev[8] ) {
+			if ( prev[SEGMENT_DESCRIPTOR_LENGTH - 1] ) {
 				let pos 		= prev.readDoubleLE(0);
 				let length 		= buff.readDoubleLE(0) - pos;
 
@@ -217,8 +219,7 @@
 			prev = buff;
 			buff = tmp;
 
-			segd_pos += 9;
-			LOOP++;
+			segd_pos += SEGMENT_DESCRIPTOR_LENGTH;
 		}
 
 
