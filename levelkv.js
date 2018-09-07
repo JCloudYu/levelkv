@@ -71,7 +71,7 @@
 			const {index} = _LevelKV.get(this);
 			const matches = [];
 			for( let key of keys ) {
-				if ( index[key] ) { matches.push(key) }
+				if ( index[key] ) { matches.push(index[key]); }
 			}
 			
 			return new DBCursor(this, matches);
@@ -207,10 +207,10 @@
 				}
 
 
-				let indexStr = raw_index.toString();
-				let { 0:key, 1:position, 2:len } = JSON.parse( indexStr.slice(0, indexStr.length - 1) );
+				let index_str = raw_index.toString();
+				let { 0:key, 1:position, 2:len } = JSON.parse( index_str.slice(0, index_str.length - 1) );
 
-				result[key] = {pos:position, length:len};
+				result[key] = {from:position, length:len};
 			}
 
 
