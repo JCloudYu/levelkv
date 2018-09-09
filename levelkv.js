@@ -15,6 +15,9 @@
 	
 	const _LevelKV  = new WeakMap();
 	const _DBCursor = new WeakMap();
+
+
+	const SEGMENT_DESCRIPTOR_LENGTH = 9;
 	
 	class DBCursor {
 		constructor(db, segments) {
@@ -64,7 +67,12 @@
 			PROPS.valid = false;
 		}
 		
-		async close() {}
+		async close() {
+			const {index_segd_fd, index_fd, storage_fd} = _LevelKV.get(this);
+			fs.closeSync(index_segd_fd);
+			fs.closeSync(index_fd);
+			fs.closeSync(storage_fd);
+		}
 		
 		async get(keys=[]) {
 			if ( !Array.isArray(keys) ) { keys = [keys]; }
@@ -79,34 +87,67 @@
 		
 		async put(keys=[], val) {
 			if ( !Array.isArray(keys) ) { keys = [keys]; }
-			const {storage_fd, index} = _LevelKV.get(this);
-			let promises = [];
+			const {storage_fd, index_fd, index_segd_fd, index_segd, index, state, state_path} = _LevelKV.get(this);
+
+			// INFO: Update the value
 			for( let key of keys ) {
 				if ( index[key] ) {
-				
+					const prev_index 	= index[key];
+					const prev_segd 	= index_segd[key];
+					state.index.frags.push({from: prev_segd.from, length: prev_segd.length});
+					state.storage.frags.push({from: prev_index.from, length: prev_index.length});
 				}
-				
-				let data = Buffer.from(JSON.stringify(val), 'utf8');
-				fs.write(storage_fd, data, 0, data.length, state.storage.size, (err, numBytes)=>{
-				
-				});
+
+
+
+				const data_raw 	= Buffer.from(JSON.stringify(val) + '\n', 'utf8');
+				const new_index = [key, state.storage.size, data_raw.length];
+				const index_raw = Buffer.from(JSON.stringify(new_index) + '\n', 'utf8');
+
+
+				// INFO: Write storage
+				fs.appendFileSync(storage_fd, data_raw);
+				state.storage.size += data_raw.length;
+
+				// INFO: Write index
+				fs.appendFileSync(index_fd, index_raw);
+				state.index.size += index_raw.length;
+
+				// INFO: Write index segment descriptor
+				const segd = Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH);
+				segd.writeDoubleLE(state.index.size, 0);
+				segd.writeUInt8(0x01, SEGMENT_DESCRIPTOR_LENGTH - 1);
+				fs.appendFileSync(index_segd_fd, segd);
+
+
+
+				// INFO: Update index
+				index[key] = {from: new_index[1], length: new_index[2]};
+				index_segd[key] = {from: state.index.size, length: index_raw.length};
 			}
-			
-			
-			// TODO: Update index
+
+
+
+			// INFO: Update state
+			state.total_records = Object.keys(index).length;
+			fs.writeFileSync(state_path, JSON.stringify(state));
 		}
 		
 		async del(keys=[]) {
 			if ( !Array.isArray(keys) ) { keys = [keys]; }
-			const {index, state} = _LevelKV.get(this);
+			const {index_segd, index, state, state_path} = _LevelKV.get(this);
 			for( let key of keys ) {
 				if ( index[key] ) {
-					state.storage.fragments.push(index[key]);
+					state.storage.frags.push(index[key]);
+					state.index.frags.push(index_segd[key]);
 					delete index[key];
 				}
 			}
-			
-			// TODO: Update index
+
+
+			// INFO: Update state
+			state.total_records = Object.keys(index).length;
+			fs.writeFileSync(state_path, JSON.stringify(state));
 		}
 		
 		static async initFromPath(dir, options={auto_create:true}) {
@@ -128,7 +169,7 @@
 				else {
 					PROPS.state = ___GEN_DEFAULT_STATE();
 					try {
-						fs.writeFileSync(JSON.stringify(PROPS.state));
+						fs.writeFileSync(PROPS.state_path, JSON.stringify(PROPS.state));
 					}
 					catch(e) {
 						throw new Error(`Cannot write database state! (${PROPS.state_path})`);
@@ -138,24 +179,25 @@
 			// endregion
 
 			// region [ Read DB Index ]
-			PROPS.index_path = `${DB_PATH}/index.jlst`;
-			PROPS.index_segd_path = `${DB_PATH}/index.segd`;
+			PROPS.index_path 		= `${DB_PATH}/index.jlst`;
+			PROPS.index_segd_path 	= `${DB_PATH}/index.segd`;
+			PROPS.index_segd 		= {};
 			try {
 				PROPS.index_segd_fd = fs.openSync( PROPS.index_segd_path, "a+" );
-				PROPS.index_fd = fs.openSync( PROPS.index_path, "a+" );
-				PROPS.index = ___READ_INDEX( PROPS.index_segd_fd, PROPS.index_fd );
+				PROPS.index_fd 		= fs.openSync( PROPS.index_path, "a+" );
+				const { index, index_segd } =  ___READ_INDEX( PROPS.index_segd_fd, PROPS.index_fd, PROPS.state );
+				PROPS.index 		= index;
+				PROPS.index_segd 	= index_segd;
 			}
 			catch(e) {
-				/*
 				PROPS.index = {};
 				
 				try {
-					___WRITE_INDEX(PROPS.index_path, PROPS.index);
+					___WRITE_IDNEX_SEGD(PROPS.index_segd_path);
 				}
 				catch(e) {
 					throw new Error(`Cannot write database main index! (${PROPS.index_path})`);
 				}
-				*/
 			}
 			// endregion
 			
@@ -180,15 +222,26 @@
 	
 	
 	
-	function ___READ_INDEX(segd_fd, index_fd) {
-		const SEGMENT_DESCRIPTOR_LENGTH = 9;
+	function ___READ_INDEX(segd_fd, index_fd, state) {
 		const segd_size = fs.fstatSync(segd_fd).size;
-		let rLen, buff = Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH), segd_pos = 0, prev = null;
+		let rLen, buff 	= Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH), segd_pos = 0, prev = null;
 
-		const result = {};
+		const r_index = {};
+		const r_index_segd = {};
+
+		// INFO: Add the first index position.
+		if( !segd_size ){
+			const segd = Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH);
+			segd.writeDoubleLE(0, 0);
+			segd.writeUInt8(0x01, SEGMENT_DESCRIPTOR_LENGTH - 1);
+			fs.appendFileSync(index_segd_fd, segd);
+		}
+
+
+
 		while(segd_pos < segd_size) {
 			rLen = fs.readSync(segd_fd, buff, 0, SEGMENT_DESCRIPTOR_LENGTH, segd_pos);
-			if ( rLen !== 9 ) {
+			if ( rLen !== SEGMENT_DESCRIPTOR_LENGTH ) {
 				throw "Insufficient data in index segmentation descriptor!";
 			}
 
@@ -206,11 +259,13 @@
 					throw "Insufficient data in index!";
 				}
 
+				if( !state.index.frags.find((frag)=>{ return pos === frag.from; }) ){
+					let index_str = raw_index.toString();
+					let { 0:key, 1:position, 2:len } = JSON.parse( index_str.slice(0, index_str.length - 1) );
 
-				let index_str = raw_index.toString();
-				let { 0:key, 1:position, 2:len } = JSON.parse( index_str.slice(0, index_str.length - 1) );
-
-				result[key] = {from:position, length:len};
+					r_index[key] 		= {from:position, 	length:len};
+					r_index_segd[key] 	= {from:pos, 		length:length};
+				}
 			}
 
 
@@ -223,10 +278,16 @@
 		}
 
 
-		return result;
+		return {index: r_index, index_segd: r_index_segd};
 	}
 	async function ___WRITE_INDEX(index_path, index) {
 	
+	}
+	async function ___WRITE_IDNEX_SEGD(index_segd_path){
+		let segd = Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH);
+		segd.writeDoubleLE(0, 0);
+		segd.writeUInt8(0x01, SEGMENT_DESCRIPTOR_LENGTH - 1);
+		fs.appendFileSync(index_segd_path, segd);
 	}
 	function ___GEN_DEFAULT_STATE() {
 		return {
