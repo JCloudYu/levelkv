@@ -16,9 +16,10 @@
 	const _LevelKV  = new WeakMap();
 	const _DBCursor = new WeakMap();
 
-
 	const SEGMENT_DESCRIPTOR_LENGTH = 9;
-	
+	const DATA_IS_AVAILABLE 		= 0x01;
+	const DATA_IS_UNAVAILABLE 		= 0x00;
+
 	class DBCursor {
 		constructor(db, segments) {
 			const PROPS = {
@@ -116,7 +117,7 @@
 				// INFO: Write index segment descriptor
 				const segd = Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH);
 				segd.writeDoubleLE(state.index.size, 0);
-				segd.writeUInt8(0x01, SEGMENT_DESCRIPTOR_LENGTH - 1);
+				segd.writeUInt8(DATA_IS_AVAILABLE, SEGMENT_DESCRIPTOR_LENGTH - 1);
 				fs.appendFileSync(index_segd_fd, segd);
 
 
@@ -233,7 +234,7 @@
 		if( !segd_size ){
 			const segd = Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH);
 			segd.writeDoubleLE(0, 0);
-			segd.writeUInt8(0x01, SEGMENT_DESCRIPTOR_LENGTH - 1);
+			segd.writeUInt8(DATA_IS_AVAILABLE, SEGMENT_DESCRIPTOR_LENGTH - 1);
 			fs.appendFileSync(index_segd_fd, segd);
 		}
 
@@ -286,7 +287,7 @@
 	async function ___WRITE_IDNEX_SEGD(index_segd_path){
 		let segd = Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH);
 		segd.writeDoubleLE(0, 0);
-		segd.writeUInt8(0x01, SEGMENT_DESCRIPTOR_LENGTH - 1);
+		segd.writeUInt8(DATA_IS_AVAILABLE, SEGMENT_DESCRIPTOR_LENGTH - 1);
 		fs.appendFileSync(index_segd_path, segd);
 	}
 	function ___GEN_DEFAULT_STATE() {
