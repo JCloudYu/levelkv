@@ -82,7 +82,6 @@
 			for( let key of keys ) {
 				if ( index[key] ) { matches.push(index[key]); }
 			}
-			
 			return new DBCursor(this, matches);
 		}
 		
@@ -97,6 +96,11 @@
 					const prev_segd 	= index_segd[key];
 					state.index.frags.push({from: prev_segd.from, length: prev_segd.length});
 					state.storage.frags.push({from: prev_index.from, length: prev_index.length});
+
+					// INFO: Update segd
+					const segd = Buffer.alloc(1);
+					segd.writeUInt8(DATA_IS_UNAVAILABLE, 0);
+					fs.writeSync( index_segd_fd, segd, 0, 1, prev_segd.segd_pos + SEGMENT_DESCRIPTOR_LENGTH - 1 );
 				}
 
 
@@ -115,16 +119,17 @@
 				state.index.size += index_raw.length;
 
 				// INFO: Write index segment descriptor
+				const segd_size = fs.fstatSync(index_segd_fd).size;
 				const segd = Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH);
 				segd.writeDoubleLE(state.index.size, 0);
 				segd.writeUInt8(DATA_IS_AVAILABLE, SEGMENT_DESCRIPTOR_LENGTH - 1);
-				fs.appendFileSync(index_segd_fd, segd);
+				fs.writeSync(index_segd_fd, segd, 0, SEGMENT_DESCRIPTOR_LENGTH, segd_size);
 
 
 
 				// INFO: Update index
 				index[key] = {from: new_index[1], length: new_index[2]};
-				index_segd[key] = {from: state.index.size, length: index_raw.length};
+				index_segd[key] = {from: state.index.size, length: index_raw.length, segd_pos: segd_size - SEGMENT_DESCRIPTOR_LENGTH};
 			}
 
 
@@ -136,12 +141,18 @@
 		
 		async del(keys=[]) {
 			if ( !Array.isArray(keys) ) { keys = [keys]; }
-			const {index_segd, index, state, state_path} = _LevelKV.get(this);
+			const {index_segd_fd, index_segd, index, state, state_path} = _LevelKV.get(this);
 			for( let key of keys ) {
 				if ( index[key] ) {
 					state.storage.frags.push(index[key]);
 					state.index.frags.push(index_segd[key]);
 					delete index[key];
+
+					// INFO: Update segd
+					const prev_segd = index_segd[key];
+					const segd = Buffer.alloc(1);
+					segd.writeUInt8(DATA_IS_UNAVAILABLE, 0);
+					fs.writeSync( index_segd_fd, segd, 0, 1, prev_segd.segd_pos + SEGMENT_DESCRIPTOR_LENGTH - 1 );
 				}
 			}
 
@@ -184,9 +195,10 @@
 			PROPS.index_segd_path 	= `${DB_PATH}/index.segd`;
 			PROPS.index_segd 		= {};
 			try {
-				PROPS.index_segd_fd = fs.openSync( PROPS.index_segd_path, "a+" );
+				PROPS.index_segd_fd = fs.openSync( PROPS.index_segd_path, "r+" );
 				PROPS.index_fd 		= fs.openSync( PROPS.index_path, "a+" );
-				const { index, index_segd } =  ___READ_INDEX( PROPS.index_segd_fd, PROPS.index_fd, PROPS.state );
+
+				const { index, index_segd } =  ___READ_INDEX( PROPS.index_segd_fd, PROPS.index_fd );
 				PROPS.index 		= index;
 				PROPS.index_segd 	= index_segd;
 			}
@@ -195,6 +207,8 @@
 				
 				try {
 					___WRITE_IDNEX_SEGD(PROPS.index_segd_path);
+					___WRITE_INDEX(PROPS.index_path);
+
 				}
 				catch(e) {
 					throw new Error(`Cannot write database main index! (${PROPS.index_path})`);
@@ -223,7 +237,7 @@
 	
 	
 	
-	function ___READ_INDEX(segd_fd, index_fd, state) {
+	function ___READ_INDEX(segd_fd, index_fd) {
 		const segd_size = fs.fstatSync(segd_fd).size;
 		let rLen, buff 	= Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH), segd_pos = 0, prev = null;
 
@@ -235,7 +249,7 @@
 			const segd = Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH);
 			segd.writeDoubleLE(0, 0);
 			segd.writeUInt8(DATA_IS_AVAILABLE, SEGMENT_DESCRIPTOR_LENGTH - 1);
-			fs.appendFileSync(index_segd_fd, segd);
+			fs.writeSync(segd_fd, segd, 0, SEGMENT_DESCRIPTOR_LENGTH, 0);
 		}
 
 
@@ -260,13 +274,12 @@
 					throw "Insufficient data in index!";
 				}
 
-				if( !state.index.frags.find((frag)=>{ return pos === frag.from; }) ){
-					let index_str = raw_index.toString();
-					let { 0:key, 1:position, 2:len } = JSON.parse( index_str.slice(0, index_str.length - 1) );
 
-					r_index[key] 		= {from:position, 	length:len};
-					r_index_segd[key] 	= {from:pos, 		length:length};
-				}
+				let index_str = raw_index.toString();
+				let { 0:key, 1:position, 2:len } = JSON.parse( index_str.slice(0, index_str.length - 1) );
+
+				r_index[key] 		= {from:position, 	length:len};
+				r_index_segd[key] 	= {from:pos, 		length:length, segd_pos: segd_pos - SEGMENT_DESCRIPTOR_LENGTH};
 			}
 
 
@@ -281,8 +294,8 @@
 
 		return {index: r_index, index_segd: r_index_segd};
 	}
-	async function ___WRITE_INDEX(index_path, index) {
-	
+	async function ___WRITE_INDEX(index_path) {
+		fs.closeSync(fs.openSync( index_path, "a+" ));
 	}
 	async function ___WRITE_IDNEX_SEGD(index_segd_path){
 		let segd = Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH);
