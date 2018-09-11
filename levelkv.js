@@ -69,15 +69,23 @@
 		}
 		
 		async close() {
-			const {index_segd_fd, index_fd, storage_fd} = _LevelKV.get(this);
-			fs.closeSync(index_segd_fd);
-			fs.closeSync(index_fd);
-			fs.closeSync(storage_fd);
+			const props = _LevelKV.get(this);
+
+			fs.closeSync(props.index_segd_fd);
+			fs.closeSync(props.index_fd);
+			fs.closeSync(props.storage_fd);
+
+			props.valid = false;
 		}
 		
 		async get(keys=[]) {
+			const {index, valid} = _LevelKV.get(this);
+			if( !valid ) throw new Error( 'Database is not available!' );
+
+
 			if ( !Array.isArray(keys) ) { keys = [keys]; }
-			const {index} = _LevelKV.get(this);
+			if( !keys.length ) keys = Object.keys(index);
+
 			const matches = [];
 			for( let key of keys ) {
 				if ( index[key] ) { matches.push(index[key]); }
@@ -86,8 +94,11 @@
 		}
 		
 		async put(keys=[], val) {
+			const {storage_fd, index_fd, index_segd_fd, index_segd, index, state, state_path, valid} = await _LevelKV.get(this);
+			if( !valid ) throw new Error( 'Database is not available!' );
+
+
 			if ( !Array.isArray(keys) ) { keys = [keys]; }
-			const {storage_fd, index_fd, index_segd_fd, index_segd, index, state, state_path} = _LevelKV.get(this);
 
 			// INFO: Update the value
 			for( let key of keys ) {
@@ -140,8 +151,12 @@
 		}
 		
 		async del(keys=[]) {
+			const {index_segd_fd, index_segd, index, state, state_path, valid} = _LevelKV.get(this);
+			if( !valid ) throw new Error( 'Database is not available !' );
+
+
 			if ( !Array.isArray(keys) ) { keys = [keys]; }
-			const {index_segd_fd, index_segd, index, state, state_path} = _LevelKV.get(this);
+
 			for( let key of keys ) {
 				if ( index[key] ) {
 					state.storage.frags.push(index[key]);
@@ -216,7 +231,7 @@
 				}
 			}
 			// endregion
-			
+
 			// region [ Prepare DB Storage ]
 			PROPS.storage_path = `${DB_PATH}/storage.jlst`;
 			try {
