@@ -306,7 +306,7 @@
 	function ___GEN_DEFAULT_STATE() {
 		return {
 			version:1, total_records:0,
-			index:{ segments:0, size:0, frags:[] },
+			index:{ size:0, frags:[] },
 			storage:{ size:0, frags:[] }
 		};
 	}
