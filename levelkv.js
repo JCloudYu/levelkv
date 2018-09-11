@@ -195,8 +195,8 @@
 			PROPS.index_segd_path 	= `${DB_PATH}/index.segd`;
 			PROPS.index_segd 		= {};
 			try {
-				PROPS.index_segd_fd = fs.openSync( PROPS.index_segd_path, "r+" );
 				PROPS.index_fd 		= fs.openSync( PROPS.index_path, "a+" );
+				PROPS.index_segd_fd = fs.openSync( PROPS.index_segd_path, "r+" );
 
 				const { index, index_segd } =  ___READ_INDEX( PROPS.index_segd_fd, PROPS.index_fd );
 				PROPS.index 		= index;
@@ -204,11 +204,12 @@
 			}
 			catch(e) {
 				PROPS.index = {};
-				
-				try {
-					___WRITE_IDNEX_SEGD(PROPS.index_segd_path);
-					___WRITE_INDEX(PROPS.index_path);
+				PROPS.index_segd = {};
 
+				try {
+					___WRITE_IDNEX_SEGD(PROPS.index_segd_path).then((index_segd_fd)=>{
+						PROPS.index_segd_fd = index_segd_fd;
+					});
 				}
 				catch(e) {
 					throw new Error(`Cannot write database main index! (${PROPS.index_path})`);
@@ -294,14 +295,12 @@
 
 		return {index: r_index, index_segd: r_index_segd};
 	}
-	async function ___WRITE_INDEX(index_path) {
-		fs.closeSync(fs.openSync( index_path, "a+" ));
-	}
 	async function ___WRITE_IDNEX_SEGD(index_segd_path){
 		let segd = Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH);
 		segd.writeDoubleLE(0, 0);
 		segd.writeUInt8(DATA_IS_AVAILABLE, SEGMENT_DESCRIPTOR_LENGTH - 1);
 		fs.appendFileSync(index_segd_path, segd);
+		return fs.openSync( index_segd_path, "r+" );
 	}
 	function ___GEN_DEFAULT_STATE() {
 		return {
