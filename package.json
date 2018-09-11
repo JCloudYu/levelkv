@@ -4,7 +4,7 @@
 	"description": "A very simple level db native nodejs implementation",
 	"main": "leveld.js",
 	"scripts": {
-		"test": "node ./tests/test.js",
+		"test": "node ./test/test.js",
 		"test_json": "node ./tests/test_json.js"
 	},
 	"repository": {

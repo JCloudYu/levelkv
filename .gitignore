@@ -6,3 +6,4 @@ Thumbs.db
 package-lock.json
 
 node_modules
+test/test_db
