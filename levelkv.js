@@ -7,9 +7,9 @@
 (()=>{
 	"use strict";
 	
-	const fs	= require( 'fs' );
-	const path	= require( 'path' );
-	
+	const fs		= require( 'fs' );
+	const path		= require( 'path' );
+	const promisefy = require( './lib/promisefy' );
 	
 	
 	
@@ -71,9 +71,9 @@
 		async close() {
 			const props = _LevelKV.get(this);
 
-			fs.closeSync(props.index_segd_fd);
-			fs.closeSync(props.index_fd);
-			fs.closeSync(props.storage_fd);
+			await promisefy( fs.close, fs, props.index_segd_fd );
+			await promisefy( fs.close, fs, props.index_fd );
+			await promisefy( fs.close, fs, props.storage_fd );
 
 			props.valid = false;
 		}
@@ -111,7 +111,7 @@
 					// INFO: Update segd
 					const segd = Buffer.alloc(1);
 					segd.writeUInt8(DATA_IS_UNAVAILABLE, 0);
-					fs.writeSync( index_segd_fd, segd, 0, 1, prev_segd.segd_pos + SEGMENT_DESCRIPTOR_LENGTH - 1 );
+					await promisefy( fs.write, fs, index_segd_fd, segd, 0, 1, prev_segd.segd_pos + SEGMENT_DESCRIPTOR_LENGTH - 1 );
 				}
 
 
@@ -122,19 +122,20 @@
 
 
 				// INFO: Write storage
-				fs.appendFileSync(storage_fd, data_raw);
+				await promisefy( fs.appendFile, fs, storage_fd, data_raw );
 				state.storage.size += data_raw.length;
 
 				// INFO: Write index
-				fs.appendFileSync(index_fd, index_raw);
+				await promisefy( fs.appendFile, fs, index_fd, index_raw );
 				state.index.size += index_raw.length;
 
 				// INFO: Write index segment descriptor
-				const segd_size = fs.fstatSync(index_segd_fd).size;
+				const [stats] = await promisefy( fs.fstat, fs, index_segd_fd );
+				const segd_size = stats.size;
 				const segd = Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH);
 				segd.writeDoubleLE(state.index.size, 0);
 				segd.writeUInt8(DATA_IS_AVAILABLE, SEGMENT_DESCRIPTOR_LENGTH - 1);
-				fs.writeSync(index_segd_fd, segd, 0, SEGMENT_DESCRIPTOR_LENGTH, segd_size);
+				await promisefy( fs.write, fs, index_segd_fd, segd, 0, SEGMENT_DESCRIPTOR_LENGTH, segd_size );
 
 
 
@@ -147,7 +148,7 @@
 
 			// INFO: Update state
 			state.total_records = Object.keys(index).length;
-			fs.writeFileSync(state_path, JSON.stringify(state));
+			await promisefy( fs.writeFile, fs, state_path, JSON.stringify(state) );
 		}
 		
 		async del(keys=[]) {
@@ -167,14 +168,14 @@
 					const prev_segd = index_segd[key];
 					const segd = Buffer.alloc(1);
 					segd.writeUInt8(DATA_IS_UNAVAILABLE, 0);
-					fs.writeSync( index_segd_fd, segd, 0, 1, prev_segd.segd_pos + SEGMENT_DESCRIPTOR_LENGTH - 1 );
+					await promisefy( fs.write, fs, index_segd_fd, segd, 0, 1, prev_segd.segd_pos + SEGMENT_DESCRIPTOR_LENGTH - 1 );
 				}
 			}
 
 
 			// INFO: Update state
 			state.total_records = Object.keys(index).length;
-			fs.writeFileSync(state_path, JSON.stringify(state));
+			await promisefy( fs.writeFile, fs, state_path, JSON.stringify(state) );
 		}
 		
 		static async initFromPath(dir, options={auto_create:true}) {
