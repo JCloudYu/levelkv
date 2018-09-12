@@ -71,9 +71,9 @@
 		async close() {
 			const props = _LevelKV.get(this);
 
-			await promisefy( fs.close, fs, props.index_segd_fd );
-			await promisefy( fs.close, fs, props.index_fd );
-			await promisefy( fs.close, fs, props.storage_fd );
+			promisefy( fs.close, fs, props.index_segd_fd );
+			promisefy( fs.close, fs, props.index_fd );
+			promisefy( fs.close, fs, props.storage_fd );
 
 			props.valid = false;
 		}
@@ -111,6 +111,9 @@
 				const segd_size = state.segd.size;
 				const segd 		= Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH);
 
+				const storage_pos 	= state.storage.size;
+				const index_pos 	= state.index.size;
+
 
 				state.storage.size += data_raw.length;
 				state.index.size += index_raw.length;
@@ -133,21 +136,22 @@
 					// INFO: Update segd
 					const segd = Buffer.alloc(1);
 					segd.writeUInt8(DATA_IS_UNAVAILABLE, 0);
-					await promisefy( fs.write, fs, index_segd_fd, segd, 0, 1, prev_segd.segd_pos + SEGMENT_DESCRIPTOR_LENGTH - 1 );
+
+					promisefy( fs.write, fs, index_segd_fd, segd, 0, 1, prev_segd.segd_pos + SEGMENT_DESCRIPTOR_LENGTH - 1 );
 				}
 
 
 				// INFO: Write storage, index, and index segment descriptor
-				await promisefy( fs.appendFile, fs, storage_fd, data_raw );
-				await promisefy( fs.appendFile, fs, index_fd, index_raw );
-				await promisefy( fs.write, fs, index_segd_fd, segd, 0, SEGMENT_DESCRIPTOR_LENGTH, segd_size );
+				promisefy( fs.write, fs, storage_fd, data_raw, 0, data_raw.length, storage_pos );
+				promisefy( fs.write, fs, index_fd, index_raw, 0, index_raw.length, index_pos );
+				promisefy( fs.write, fs, index_segd_fd, segd, 0, SEGMENT_DESCRIPTOR_LENGTH, segd_size );
 			}
 
 
 
 			// INFO: Update state
 			state.total_records = Object.keys(index).length;
-			await promisefy( fs.writeFile, fs, state_path, JSON.stringify(state) );
+			promisefy( fs.writeFile, fs, state_path, JSON.stringify(state) );
 		}
 		
 		async del(keys=[]) {
@@ -167,14 +171,14 @@
 					const prev_segd = index_segd[key];
 					const segd = Buffer.alloc(1);
 					segd.writeUInt8(DATA_IS_UNAVAILABLE, 0);
-					await promisefy( fs.write, fs, index_segd_fd, segd, 0, 1, prev_segd.segd_pos + SEGMENT_DESCRIPTOR_LENGTH - 1 );
+					promisefy( fs.write, fs, index_segd_fd, segd, 0, 1, prev_segd.segd_pos + SEGMENT_DESCRIPTOR_LENGTH - 1 );
 				}
 			}
 
 
 			// INFO: Update state
 			state.total_records = Object.keys(index).length;
-			await promisefy( fs.writeFile, fs, state_path, JSON.stringify(state) );
+			promisefy( fs.writeFile, fs, state_path, JSON.stringify(state) );
 		}
 		
 		static async initFromPath(dir, options={auto_create:true}) {
@@ -210,7 +214,7 @@
 			PROPS.index_segd_path 	= `${DB_PATH}/index.segd`;
 			PROPS.index_segd 		= {};
 			try {
-				PROPS.index_fd 		= fs.openSync( PROPS.index_path, "a+" );
+				PROPS.index_fd 		= fs.openSync( PROPS.index_path, "r+" );
 				PROPS.index_segd_fd = fs.openSync( PROPS.index_segd_path, "r+" );
 
 				const { index, index_segd } =  ___READ_INDEX( PROPS.index_segd_fd, PROPS.index_fd );
@@ -222,6 +226,9 @@
 				PROPS.index_segd = {};
 
 				try {
+					___WRITE_INDEX(PROPS.index_path).then((index_fd)=>{
+						PROPS.index_fd = index_fd;
+					});
 					___WRITE_IDNEX_SEGD(PROPS.index_segd_path).then((index_segd_fd)=>{
 						PROPS.index_segd_fd = index_segd_fd;
 						PROPS.state.segd.size = fs.fstatSync( index_segd_fd ).size;
@@ -237,10 +244,17 @@
 			// region [ Prepare DB Storage ]
 			PROPS.storage_path = `${DB_PATH}/storage.jlst`;
 			try {
-				PROPS.storage_fd = fs.openSync( PROPS.storage_path, "a+" );
+				PROPS.storage_fd = fs.openSync( PROPS.storage_path, "r+" );
 			}
 			catch(e) {
-				throw new Error( `Cannot access database storage! (${PROPS.storage_path})` );
+				try {
+					___WRITE_STORAGE(PROPS.storage_path).then((storage_fd)=>{
+						PROPS.storage_fd = storage_fd;
+					});
+				}
+				catch(e) {
+					throw new Error( `Cannot access database storage! (${PROPS.storage_path})` );
+				}
 			}
 			// endregion
 			
@@ -261,15 +275,6 @@
 
 		const r_index = {};
 		const r_index_segd = {};
-
-		// INFO: Add the first index position.
-		if( !segd_size ){
-			const segd = Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH);
-			segd.writeDoubleLE(0, 0);
-			segd.writeUInt8(DATA_IS_AVAILABLE, SEGMENT_DESCRIPTOR_LENGTH - 1);
-			fs.writeSync(segd_fd, segd, 0, SEGMENT_DESCRIPTOR_LENGTH, 0);
-		}
-
 
 
 		while(segd_pos < segd_size) {
@@ -312,12 +317,20 @@
 
 		return {index: r_index, index_segd: r_index_segd};
 	}
-	async function ___WRITE_IDNEX_SEGD(index_segd_path){
+	async function ___WRITE_INDEX(index_path){
+		fs.closeSync( fs.openSync( index_path, "a+" ) );
+		return fs.openSync( index_path, "r+" );
+	}
+	async function ___WRITE_IDNEX_SEGD(index_segd_path) {
 		let segd = Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH);
 		segd.writeDoubleLE(0, 0);
 		segd.writeUInt8(DATA_IS_AVAILABLE, SEGMENT_DESCRIPTOR_LENGTH - 1);
 		fs.appendFileSync(index_segd_path, segd);
 		return fs.openSync( index_segd_path, "r+" );
+	}
+	async function ___WRITE_STORAGE(storage_path) {
+		fs.closeSync( fs.openSync( storage_path, "a+" ) );
+		return fs.openSync( storage_path, "r+" );
 	}
 	function ___GEN_DEFAULT_STATE() {
 		return {
