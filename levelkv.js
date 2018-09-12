@@ -94,7 +94,7 @@
 		}
 		
 		async put(keys=[], val) {
-			const {storage_fd, index_fd, index_segd_fd, index_segd, index, state, state_path, valid} = await _LevelKV.get(this);
+			const {storage_fd, index_fd, index_segd_fd, index_segd, index, state, state_path, valid} = _LevelKV.get(this);
 			if( !valid ) throw new Error( 'Database is not available!' );
 
 
