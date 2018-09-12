@@ -100,11 +100,33 @@
 
 			if ( !Array.isArray(keys) ) { keys = [keys]; }
 
-			// INFO: Update the value
 			for( let key of keys ) {
-				if ( index[key] ) {
-					const prev_index 	= index[key];
-					const prev_segd 	= index_segd[key];
+				const prev_index 	= index[key];
+				const prev_segd 	= index_segd[key];
+
+				const data_raw 	= Buffer.from(JSON.stringify(val) + '\n', 'utf8');
+				const new_index = [key, state.storage.size, data_raw.length];
+				const index_raw = Buffer.from(JSON.stringify(new_index) + '\n', 'utf8');
+
+				const segd_size = state.segd.size;
+				const segd 		= Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH);
+
+
+				state.storage.size += data_raw.length;
+				state.index.size += index_raw.length;
+
+				state.segd.size += SEGMENT_DESCRIPTOR_LENGTH;
+				segd.writeDoubleLE(state.index.size, 0);
+				segd.writeUInt8(DATA_IS_AVAILABLE, SEGMENT_DESCRIPTOR_LENGTH - 1);
+
+
+				// INFO: Update index
+				index[key] = {from: new_index[1], length: new_index[2]};
+				index_segd[key] = {from: state.index.size, length: index_raw.length, segd_pos: segd_size - SEGMENT_DESCRIPTOR_LENGTH};
+
+
+				// INFO: Mark the duplicate key
+				if ( prev_index ) {
 					state.index.frags.push({from: prev_segd.from, length: prev_segd.length});
 					state.storage.frags.push({from: prev_index.from, length: prev_index.length});
 
@@ -115,33 +137,10 @@
 				}
 
 
-
-				const data_raw 	= Buffer.from(JSON.stringify(val) + '\n', 'utf8');
-				const new_index = [key, state.storage.size, data_raw.length];
-				const index_raw = Buffer.from(JSON.stringify(new_index) + '\n', 'utf8');
-
-
-				// INFO: Write storage
+				// INFO: Write storage, index, and index segment descriptor
 				await promisefy( fs.appendFile, fs, storage_fd, data_raw );
-				state.storage.size += data_raw.length;
-
-				// INFO: Write index
 				await promisefy( fs.appendFile, fs, index_fd, index_raw );
-				state.index.size += index_raw.length;
-
-				// INFO: Write index segment descriptor
-				const [stats] = await promisefy( fs.fstat, fs, index_segd_fd );
-				const segd_size = stats.size;
-				const segd = Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH);
-				segd.writeDoubleLE(state.index.size, 0);
-				segd.writeUInt8(DATA_IS_AVAILABLE, SEGMENT_DESCRIPTOR_LENGTH - 1);
 				await promisefy( fs.write, fs, index_segd_fd, segd, 0, SEGMENT_DESCRIPTOR_LENGTH, segd_size );
-
-
-
-				// INFO: Update index
-				index[key] = {from: new_index[1], length: new_index[2]};
-				index_segd[key] = {from: state.index.size, length: index_raw.length, segd_pos: segd_size - SEGMENT_DESCRIPTOR_LENGTH};
 			}
 
 
@@ -225,6 +224,8 @@
 				try {
 					___WRITE_IDNEX_SEGD(PROPS.index_segd_path).then((index_segd_fd)=>{
 						PROPS.index_segd_fd = index_segd_fd;
+						PROPS.state.segd.size = fs.fstatSync( index_segd_fd ).size;
+						fs.writeFileSync( PROPS.state_path, JSON.stringify( PROPS.state ) );
 					});
 				}
 				catch(e) {
@@ -244,7 +245,7 @@
 			// endregion
 			
 			
-			
+
 			PROPS.valid = true;
 			return DB;
 		}
@@ -321,6 +322,7 @@
 	function ___GEN_DEFAULT_STATE() {
 		return {
 			version:1, total_records:0,
+			segd: { size: 0 },
 			index:{ size:0, frags:[] },
 			storage:{ size:0, frags:[] }
 		};
