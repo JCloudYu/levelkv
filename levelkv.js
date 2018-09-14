@@ -70,12 +70,13 @@
 		
 		async close() {
 			const props = _LevelKV.get(this);
-
-			promisefy( fs.close, fs, props.index_segd_fd );
-			promisefy( fs.close, fs, props.index_fd );
-			promisefy( fs.close, fs, props.storage_fd );
-
 			props.valid = false;
+
+			await Promise.all([
+				promisefy( fs.close, fs, props.index_segd_fd ),
+				promisefy( fs.close, fs, props.index_fd ),
+				promisefy( fs.close, fs, props.storage_fd )
+			]);
 		}
 		
 		async get(keys=[]) {
@@ -137,21 +138,21 @@
 					const segd = Buffer.alloc(1);
 					segd.writeUInt8(DATA_IS_UNAVAILABLE, 0);
 
-					promisefy( fs.write, fs, index_segd_fd, segd, 0, 1, prev_segd.segd_pos + SEGMENT_DESCRIPTOR_LENGTH - 1 );
+					await promisefy( fs.write, fs, index_segd_fd, segd, 0, 1, prev_segd.segd_pos + SEGMENT_DESCRIPTOR_LENGTH - 1 );
 				}
 
 
 				// INFO: Write storage, index, and index segment descriptor
-				promisefy( fs.write, fs, storage_fd, data_raw, 0, data_raw.length, storage_pos );
-				promisefy( fs.write, fs, index_fd, index_raw, 0, index_raw.length, index_pos );
-				promisefy( fs.write, fs, index_segd_fd, segd, 0, SEGMENT_DESCRIPTOR_LENGTH, segd_size );
+				await promisefy( fs.write, fs, storage_fd, data_raw, 0, data_raw.length, storage_pos );
+				await promisefy( fs.write, fs, index_fd, index_raw, 0, index_raw.length, index_pos );
+				await promisefy( fs.write, fs, index_segd_fd, segd, 0, SEGMENT_DESCRIPTOR_LENGTH, segd_size );
 			}
 
 
 
 			// INFO: Update state
 			state.total_records = Object.keys(index).length;
-			promisefy( fs.writeFile, fs, state_path, JSON.stringify(state) );
+			await promisefy( fs.writeFile, fs, state_path, JSON.stringify(state) );
 		}
 		
 		async del(keys=[]) {
@@ -171,14 +172,14 @@
 					const prev_segd = index_segd[key];
 					const segd = Buffer.alloc(1);
 					segd.writeUInt8(DATA_IS_UNAVAILABLE, 0);
-					promisefy( fs.write, fs, index_segd_fd, segd, 0, 1, prev_segd.segd_pos + SEGMENT_DESCRIPTOR_LENGTH - 1 );
+					await promisefy( fs.write, fs, index_segd_fd, segd, 0, 1, prev_segd.segd_pos + SEGMENT_DESCRIPTOR_LENGTH - 1 );
 				}
 			}
 
 
 			// INFO: Update state
 			state.total_records = Object.keys(index).length;
-			promisefy( fs.writeFile, fs, state_path, JSON.stringify(state) );
+			await promisefy( fs.writeFile, fs, state_path, JSON.stringify(state) );
 		}
 		
 		static async initFromPath(dir, options={auto_create:true}) {
