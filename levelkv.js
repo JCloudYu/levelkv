@@ -208,7 +208,8 @@
 			// region [ Read DB States ]
 			PROPS.state_path = `${DB_PATH}/state.json`;
 			try {
-				PROPS.state = JSON.parse(fs.readFileSync(PROPS.state_path));
+				const [content] = await promisefy( fs.readFile, fs, PROPS.state_path );
+				PROPS.state = JSON.parse( content );
 			}
 			catch(e) {
 				if ( !options.auto_create ) {
@@ -217,7 +218,7 @@
 				else {
 					PROPS.state = ___GEN_DEFAULT_STATE();
 					try {
-						fs.writeFileSync(PROPS.state_path, JSON.stringify(PROPS.state));
+						await promisefy( fs.writeFile, fs, PROPS.state_path, JSON.stringify(PROPS.state) );
 					}
 					catch(e) {
 						throw new Error(`Cannot write database state! (${PROPS.state_path})`);
@@ -231,10 +232,10 @@
 			PROPS.index_segd_path 	= `${DB_PATH}/index.segd`;
 			PROPS.index_segd 		= {};
 			try {
-				PROPS.index_fd 		= fs.openSync( PROPS.index_path, "r+" );
-				PROPS.index_segd_fd = fs.openSync( PROPS.index_segd_path, "r+" );
+				[PROPS.index_fd] 		= await promisefy( fs.open, fs, PROPS.index_path, "r+" );
+				[PROPS.index_segd_fd] 	= await promisefy( fs.open, fs, PROPS.index_segd_path, "r+" );
 
-				const { index, index_segd } =  ___READ_INDEX( PROPS.index_segd_fd, PROPS.index_fd );
+				const { index, index_segd } =  await ___READ_INDEX( PROPS.index_segd_fd, PROPS.index_fd );
 				PROPS.index 		= index;
 				PROPS.index_segd 	= index_segd;
 			}
@@ -243,14 +244,13 @@
 				PROPS.index_segd = {};
 
 				try {
-					___WRITE_INDEX(PROPS.index_path).then((index_fd)=>{
-						PROPS.index_fd = index_fd;
-					});
-					___WRITE_IDNEX_SEGD(PROPS.index_segd_path).then((index_segd_fd)=>{
-						PROPS.index_segd_fd = index_segd_fd;
-						PROPS.state.segd.size = fs.fstatSync( index_segd_fd ).size;
-						fs.writeFileSync( PROPS.state_path, JSON.stringify( PROPS.state ) );
-					});
+					[PROPS.index_fd] 		= await ___OPEN_NEW_FILE( PROPS.index_path );
+					[PROPS.index_segd_fd] 	= await ___WRITE_IDNEX_SEGD(PROPS.index_segd_path);
+
+					const [stats] = await promisefy( fs.fstat, fs, PROPS.index_segd_fd );
+					PROPS.state.segd.size = stats.size;
+
+					await promisefy( fs.writeFile, fs, PROPS.state_path, JSON.stringify( PROPS.state ) );
 				}
 				catch(e) {
 					throw new Error(`Cannot write database main index! (${PROPS.index_path})`);
@@ -261,13 +261,11 @@
 			// region [ Prepare DB Storage ]
 			PROPS.storage_path = `${DB_PATH}/storage.jlst`;
 			try {
-				PROPS.storage_fd = fs.openSync( PROPS.storage_path, "r+" );
+				[PROPS.storage_fd] = await promisefy( fs.open, PROPS.storage_path, "r+" );
 			}
 			catch(e) {
 				try {
-					___WRITE_STORAGE(PROPS.storage_path).then((storage_fd)=>{
-						PROPS.storage_fd = storage_fd;
-					});
+					[PROPS.storage_fd] = await ___OPEN_NEW_FILE( PROPS.storage_path );
 				}
 				catch(e) {
 					throw new Error( `Cannot access database storage! (${PROPS.storage_path})` );
@@ -286,8 +284,9 @@
 	
 	
 	
-	function ___READ_INDEX(segd_fd, index_fd) {
-		const segd_size = fs.fstatSync(segd_fd).size;
+	async function ___READ_INDEX(segd_fd, index_fd) {
+		const [stats] = await promisefy( fs.fstat, fs, segd_fd );
+		const segd_size = stats.size;
 		let rLen, buff 	= Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH), segd_pos = 0, prev = null;
 
 		const r_index = {};
@@ -295,7 +294,7 @@
 
 
 		while(segd_pos < segd_size) {
-			rLen = fs.readSync(segd_fd, buff, 0, SEGMENT_DESCRIPTOR_LENGTH, segd_pos);
+			[rLen] = await promisefy( fs.read, fs, segd_fd, buff, 0, SEGMENT_DESCRIPTOR_LENGTH, segd_pos );
 			if ( rLen !== SEGMENT_DESCRIPTOR_LENGTH ) {
 				throw "Insufficient data in index segmentation descriptor!";
 			}
@@ -309,7 +308,7 @@
 				let length 		= buff.readDoubleLE(0) - pos;
 
 				let raw_index 	= Buffer.alloc(length);
-				rLen 			= fs.readSync(index_fd, raw_index, 0, length, pos);
+				[rLen] = await promisefy( fs.read, fs, index_fd, raw_index, 0, length, pos );
 				if ( rLen !== length ) {
 					throw "Insufficient data in index!";
 				}
@@ -334,20 +333,17 @@
 
 		return {index: r_index, index_segd: r_index_segd};
 	}
-	async function ___WRITE_INDEX(index_path){
-		fs.closeSync( fs.openSync( index_path, "a+" ) );
-		return fs.openSync( index_path, "r+" );
+	async function ___OPEN_NEW_FILE(path) {
+		const [fd] = await promisefy( fs.open, fs, path, "a+" );
+		await promisefy( fs.close, fs, fd );
+		return await promisefy( fs.open, fs, path, "r+" );
 	}
 	async function ___WRITE_IDNEX_SEGD(index_segd_path) {
 		let segd = Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH);
 		segd.writeDoubleLE(0, 0);
 		segd.writeUInt8(DATA_IS_AVAILABLE, SEGMENT_DESCRIPTOR_LENGTH - 1);
-		fs.appendFileSync(index_segd_path, segd);
-		return fs.openSync( index_segd_path, "r+" );
-	}
-	async function ___WRITE_STORAGE(storage_path) {
-		fs.closeSync( fs.openSync( storage_path, "a+" ) );
-		return fs.openSync( storage_path, "r+" );
+		await promisefy( fs.appendFile, fs, index_segd_path, segd );
+		return await promisefy( fs.open, fs, index_segd_path, "r+" );
 	}
 	function ___GEN_DEFAULT_STATE() {
 		return {
