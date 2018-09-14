@@ -72,11 +72,15 @@
 			const props = _LevelKV.get(this);
 			props.valid = false;
 
-			await Promise.all([
-				promisefy( fs.close, fs, props.index_segd_fd ),
-				promisefy( fs.close, fs, props.index_fd ),
-				promisefy( fs.close, fs, props.storage_fd )
-			]);
+			try {
+				await promisefy( fs.close, fs, props.index_segd_fd );
+				await promisefy( fs.close, fs, props.index_fd );
+				await promisefy( fs.close, fs, props.storage_fd );
+			}
+			catch(e)
+			{
+				throw new Error( `An error occurs when closing the database! (${e})` );
+			}
 		}
 		
 		async get(keys=[]) {
@@ -101,58 +105,64 @@
 
 			if ( !Array.isArray(keys) ) { keys = [keys]; }
 
-			for( let key of keys ) {
-				const prev_index 	= index[key];
-				const prev_segd 	= index_segd[key];
+			try {
+				for( let key of keys ) {
+					const prev_index 	= index[key];
+					const prev_segd 	= index_segd[key];
 
-				const data_raw 	= Buffer.from(JSON.stringify(val) + '\n', 'utf8');
-				const new_index = [key, state.storage.size, data_raw.length];
-				const index_raw = Buffer.from(JSON.stringify(new_index) + '\n', 'utf8');
+					const data_raw 	= Buffer.from(JSON.stringify(val) + '\n', 'utf8');
+					const new_index = [key, state.storage.size, data_raw.length];
+					const index_raw = Buffer.from(JSON.stringify(new_index) + '\n', 'utf8');
 
-				const segd_size = state.segd.size;
-				const segd 		= Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH);
+					const segd_size = state.segd.size;
+					const segd 		= Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH);
 
-				const storage_pos 	= state.storage.size;
-				const index_pos 	= state.index.size;
-
-
-				state.storage.size += data_raw.length;
-				state.index.size += index_raw.length;
-
-				state.segd.size += SEGMENT_DESCRIPTOR_LENGTH;
-				segd.writeDoubleLE(state.index.size, 0);
-				segd.writeUInt8(DATA_IS_AVAILABLE, SEGMENT_DESCRIPTOR_LENGTH - 1);
+					const storage_pos 	= state.storage.size;
+					const index_pos 	= state.index.size;
 
 
-				// INFO: Update index
-				index[key] = {from: new_index[1], length: new_index[2]};
-				index_segd[key] = {from: state.index.size, length: index_raw.length, segd_pos: segd_size - SEGMENT_DESCRIPTOR_LENGTH};
+					state.storage.size += data_raw.length;
+					state.index.size += index_raw.length;
+
+					state.segd.size += SEGMENT_DESCRIPTOR_LENGTH;
+					segd.writeDoubleLE(state.index.size, 0);
+					segd.writeUInt8(DATA_IS_AVAILABLE, SEGMENT_DESCRIPTOR_LENGTH - 1);
 
 
-				// INFO: Mark the duplicate key
-				if ( prev_index ) {
-					state.index.frags.push({from: prev_segd.from, length: prev_segd.length});
-					state.storage.frags.push({from: prev_index.from, length: prev_index.length});
+					// INFO: Update index
+					index[key] = {from: new_index[1], length: new_index[2]};
+					index_segd[key] = {from: state.index.size, length: index_raw.length, segd_pos: segd_size - SEGMENT_DESCRIPTOR_LENGTH};
 
-					// INFO: Update segd
-					const segd = Buffer.alloc(1);
-					segd.writeUInt8(DATA_IS_UNAVAILABLE, 0);
 
-					await promisefy( fs.write, fs, index_segd_fd, segd, 0, 1, prev_segd.segd_pos + SEGMENT_DESCRIPTOR_LENGTH - 1 );
+					// INFO: Mark the duplicate key
+					if ( prev_index ) {
+						state.index.frags.push({from: prev_segd.from, length: prev_segd.length});
+						state.storage.frags.push({from: prev_index.from, length: prev_index.length});
+
+						// INFO: Update segd
+						const segd = Buffer.alloc(1);
+						segd.writeUInt8(DATA_IS_UNAVAILABLE, 0);
+
+						await promisefy( fs.write, fs, index_segd_fd, segd, 0, 1, prev_segd.segd_pos + SEGMENT_DESCRIPTOR_LENGTH - 1 );
+					}
+
+
+					// INFO: Write storage, index, and index segment descriptor
+					await promisefy( fs.write, fs, storage_fd, data_raw, 0, data_raw.length, storage_pos );
+					await promisefy( fs.write, fs, index_fd, index_raw, 0, index_raw.length, index_pos );
+					await promisefy( fs.write, fs, index_segd_fd, segd, 0, SEGMENT_DESCRIPTOR_LENGTH, segd_size );
 				}
 
 
-				// INFO: Write storage, index, and index segment descriptor
-				await promisefy( fs.write, fs, storage_fd, data_raw, 0, data_raw.length, storage_pos );
-				await promisefy( fs.write, fs, index_fd, index_raw, 0, index_raw.length, index_pos );
-				await promisefy( fs.write, fs, index_segd_fd, segd, 0, SEGMENT_DESCRIPTOR_LENGTH, segd_size );
+
+				// INFO: Update state
+				state.total_records = Object.keys(index).length;
+				await promisefy( fs.writeFile, fs, state_path, JSON.stringify(state) );
 			}
-
-
-
-			// INFO: Update state
-			state.total_records = Object.keys(index).length;
-			await promisefy( fs.writeFile, fs, state_path, JSON.stringify(state) );
+			catch(e)
+			{
+				throw new Error( `Cannot put data! (${e})` );
+			}
 		}
 		
 		async del(keys=[]) {
@@ -162,24 +172,30 @@
 
 			if ( !Array.isArray(keys) ) { keys = [keys]; }
 
-			for( let key of keys ) {
-				if ( index[key] ) {
-					state.storage.frags.push(index[key]);
-					state.index.frags.push(index_segd[key]);
-					delete index[key];
+			try {
+				for( let key of keys ) {
+					if ( index[key] ) {
+						state.storage.frags.push(index[key]);
+						state.index.frags.push(index_segd[key]);
+						delete index[key];
 
-					// INFO: Update segd
-					const prev_segd = index_segd[key];
-					const segd = Buffer.alloc(1);
-					segd.writeUInt8(DATA_IS_UNAVAILABLE, 0);
-					await promisefy( fs.write, fs, index_segd_fd, segd, 0, 1, prev_segd.segd_pos + SEGMENT_DESCRIPTOR_LENGTH - 1 );
+						// INFO: Update segd
+						const prev_segd = index_segd[key];
+						const segd = Buffer.alloc(1);
+						segd.writeUInt8(DATA_IS_UNAVAILABLE, 0);
+						await promisefy( fs.write, fs, index_segd_fd, segd, 0, 1, prev_segd.segd_pos + SEGMENT_DESCRIPTOR_LENGTH - 1 );
+					}
 				}
+
+
+				// INFO: Update state
+				state.total_records = Object.keys(index).length;
+				await promisefy( fs.writeFile, fs, state_path, JSON.stringify(state) );
 			}
-
-
-			// INFO: Update state
-			state.total_records = Object.keys(index).length;
-			await promisefy( fs.writeFile, fs, state_path, JSON.stringify(state) );
+			catch(e)
+			{
+				throw new Error( `Cannot delete data! (${e})` );
+			}
 		}
 		
 		static async initFromPath(dir, options={auto_create:true}) {
