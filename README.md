@@ -13,15 +13,28 @@ A simple native Node.js implementation of the well-known key-value based LevelDB
 // Open a database
 const db = await require('levelkv').initFromPath('your_directory_path');
 
+
 let key = 'key';
 let value = { a:1, b:2, c:3 };
 
 // Add data
 await db.put( key, value );
+
 // Get data
-await db.get( key );
+let result = await db.get( key );
+console.log( await result.toArray() );
+
+
 // Delete data
 await db.del( key );
+
+// Get all data
+result = await db.get();
+for await( let value of result )
+{
+    console.log( value );
+}
+
 
 // Close the database
 await db.close();
