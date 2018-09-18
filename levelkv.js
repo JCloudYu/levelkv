@@ -67,7 +67,13 @@
 			
 			PROPS.valid = false;
 		}
-		
+
+		/**
+		 * Close the database.
+		 *
+		 * @async
+		 * @returns {Promise<void>} - Promise object.
+		 */
 		async close() {
 			const props = _LevelKV.get(this);
 			props.valid = false;
@@ -82,7 +88,14 @@
 				throw new Error( `An error occurs when closing the database! (${e})` );
 			}
 		}
-		
+
+		/**
+		 * Get data from the database.
+		 *
+		 * @async
+		 * @param {string|string[]} keys - A specific key or an array of keys to retrieve, if not given it will retrieve all data from the database.
+		 * @returns {Promise<DBCursor>} - Promise object represents the database cursor of the retrieved data.
+		 */
 		async get(keys=[]) {
 			const {index, valid} = _LevelKV.get(this);
 			if( !valid ) throw new Error( 'Database is not available!' );
@@ -97,7 +110,15 @@
 			}
 			return new DBCursor(this, matches);
 		}
-		
+
+		/**
+		 * Add data to the database.
+		 *
+		 * @async
+		 * @param {string|string[]} keys - A specific key or an array of keys to add.
+		 * @param {*} val - The value to add.
+		 * @returns {Promise<void>} - Promise object.
+		 */
 		async put(keys=[], val) {
 			const {storage_fd, index_fd, index_segd_fd, index_segd, index, state, state_path, valid} = _LevelKV.get(this);
 			if( !valid ) throw new Error( 'Database is not available!' );
@@ -164,7 +185,14 @@
 				throw new Error( `Cannot put data! (${e})` );
 			}
 		}
-		
+
+		/**
+		 * Delete data from the database.
+		 *
+		 * @async
+		 * @param {string|string[]} keys -  A specific key or an array of keys to delete.
+		 * @returns {Promise<void>} - Promise object.
+		 */
 		async del(keys=[]) {
 			const {index_segd_fd, index_segd, index, state, state_path, valid} = _LevelKV.get(this);
 			if( !valid ) throw new Error( 'Database is not available !' );
@@ -197,7 +225,15 @@
 				throw new Error( `Cannot delete data! (${e})` );
 			}
 		}
-		
+
+		/**
+		 * Initialize the database.
+		 *
+		 * @async
+		 * @param {string} dir - Directory path of the database. Make sure you have created or it will fail if the directory does not exist.
+		 * @param {object} options - Database creating options. Defaults to {auto_create:true}, which means create a new database automatically if not exist.
+		 * @returns {Promise<LevelKV>} - Promise object represents the database itself.
+		 */
 		static async initFromPath(dir, options={auto_create:true}) {
 			const DB_PATH = path.resolve(dir);
 			const DB = new LevelKV();
