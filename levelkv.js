@@ -72,7 +72,6 @@
 		 * Close the database.
 		 *
 		 * @async
-		 * @returns {Promise<void>} - Promise object.
 		 */
 		async close() {
 			const props = _LevelKV.get(this);
@@ -117,7 +116,6 @@
 		 * @async
 		 * @param {string|string[]} keys - A specific key or an array of keys to add.
 		 * @param {*} val - The value to add.
-		 * @returns {Promise<void>} - Promise object.
 		 */
 		async put(keys=[], val) {
 			const {storage_fd, index_fd, index_segd_fd, index_segd, index, state, state_path, valid} = _LevelKV.get(this);
@@ -191,7 +189,6 @@
 		 *
 		 * @async
 		 * @param {string|string[]} keys -  A specific key or an array of keys to delete.
-		 * @returns {Promise<void>} - Promise object.
 		 */
 		async del(keys=[]) {
 			const {index_segd_fd, index_segd, index, state, state_path, valid} = _LevelKV.get(this);

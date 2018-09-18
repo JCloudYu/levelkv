@@ -30,7 +30,7 @@ await db.close();
 
 
 ## Notice ##
-All the operations in LevelKV are asynchronous, remember to add `await` in front of the function call if you need.
+All the operations in LevelKV are asynchronous, remember to add `await` keyword in front of the function call if you need.
 
 
 
@@ -54,7 +54,6 @@ All the operations in LevelKV are asynchronous, remember to add `await` in front
  * Close the database.
  *
  * @async
- * @returns {Promise<void>} - Promise object.
  */
 .close()
 ```
@@ -77,7 +76,6 @@ All the operations in LevelKV are asynchronous, remember to add `await` in front
  * @async
  * @param {string|string[]} keys - A specific key or an array of keys to add.
  * @param {*} val - The value to add.
- * @returns {Promise<void>} - Promise object.
  */
 .put(keys=[], val)
 ```
@@ -87,7 +85,6 @@ All the operations in LevelKV are asynchronous, remember to add `await` in front
  *
  * @async
  * @param {string|string[]} keys -  A specific key or an array of keys to delete.
- * @returns {Promise<void>} - Promise object.
  */
 .del(keys=[])
 ```
