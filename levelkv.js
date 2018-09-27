@@ -25,7 +25,7 @@
 			const PROPS = {
 				db: _LevelKV.get(db),
 				segments,
-				size: segments.length
+				length: segments.length
 			};
 			_DBCursor.set(this, PROPS);
 		}
@@ -37,9 +37,8 @@
 			
 			return results;
 		}
-		get size(){
-			return _DBCursor.get(this).size;
-		}
+		get size() 		{ return _DBCursor.get(this).length; }
+		get length() 	{ return _DBCursor.get(this).length; }
 		next() {
 			const { db:{storage_fd}, segments } = _DBCursor.get(this);
 			if ( segments.length > 0 ) {
