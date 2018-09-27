@@ -23,6 +23,7 @@ await db.put( key, value );
 // Get data
 let result = await db.get( key );
 console.log( await result.toArray() );
+console.log( result.length );
 
 
 // Delete data
