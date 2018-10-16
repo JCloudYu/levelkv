@@ -63,6 +63,49 @@
 		}
 		[Symbol.iterator](){ return this; }
 	}
+	class DBMutableCursor extends DBCursor {
+		constructor(dbCursor) {
+			super(null, []);
+			_DBCursor.set(this, _DBCursor.get(dbCursor));
+		}
+		get segments() {
+			return _DBCursor.get(this).segments;
+		}
+		updateCursor(updater) {
+			const {segments} = _DBCursor.get(this);
+			updater(segments);
+			_DBCursor.get(this).length = segments.length;
+		}
+		next() {
+			const { db:{storage_fd}, segments } = _DBCursor.get(this);
+			if ( segments.length > 0 ) {
+				let {key, from, length, in_memory, value} = segments.shift();
+				if( in_memory === true )
+				{
+					return { value: new Promise((resolve, reject)=>{
+						resolve(value);
+					}) };
+				}
+				return {value:new Promise((resolve, reject)=>{
+					fs.read(storage_fd, Buffer.alloc(length), 0, length, from, (err, numBytes, buff)=>{
+						if ( err ) {
+							return reject({_system:true, error:err});
+						}
+
+						if ( numBytes !== length ) {
+							return reject({_system:false, error:new Error("Not enough data!")});
+						}
+
+						resolve(JSON.parse(buff.toString('utf8')));
+					});
+				})};
+			}
+			else {
+				return {done:true};
+			}
+		}
+		[Symbol.iterator](){ return this; }
+	}
 	class LevelKV {
 		constructor() {
 			const PROPS = {};
@@ -108,7 +151,11 @@
 
 			const matches = [];
 			for( let key of keys ) {
-				if ( index[key] ) { matches.push(index[key]); }
+				if ( index[key] ) {
+					const data = index[key];
+					data.key = key;
+					matches.push(index[key]);
+				}
 			}
 			return new DBCursor(this, matches);
 		}
@@ -316,7 +363,7 @@
 		}
 	}
 	
-	module.exports = LevelKV;
+	module.exports = { LevelKV, DBMutableCursor };
 	
 	
 	
