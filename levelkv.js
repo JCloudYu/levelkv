@@ -71,18 +71,18 @@
 	class DBMutableCursor extends DBCursor {
 		constructor(dbCursor) {
 			if( !(dbCursor instanceof DBCursor) ) throw new Error(`The parameter should be a DBCursor!`);
+
 			super(null, []);
-			_DBCursor.set(this, _DBCursor.get(dbCursor));
+			_DBCursor.set(this, JSON.parse( JSON.stringify(_DBCursor.get(dbCursor)) ) );
+			_DBCursor.get(dbCursor).segments = [];
 		}
-		get segments() {
-			return _DBCursor.get(this).segments;
-		}
+		get segments() { return _DBCursor.get(this).segments; }
 	}
 	class LevelKV {
 		constructor() {
 			const PROPS = {};
 			_LevelKV.set(this, PROPS);
-			
+
 			PROPS.valid = false;
 		}
 
