@@ -24,8 +24,7 @@
 		constructor(db, segments) {
 			const PROPS = {
 				db: _LevelKV.get(db),
-				segments,
-				length: segments.length
+				segments
 			};
 			_DBCursor.set(this, PROPS);
 		}
@@ -37,12 +36,18 @@
 			
 			return results;
 		}
-		get size() 		{ return _DBCursor.get(this).length; }
-		get length() 	{ return _DBCursor.get(this).length; }
+		get size() 		{ return _DBCursor.get(this).segments.length; }
+		get length() 	{ return _DBCursor.get(this).segments.length; }
 		next() {
 			const { db:{storage_fd}, segments } = _DBCursor.get(this);
 			if ( segments.length > 0 ) {
-				let {from, length} = segments.shift();
+				let {key, from, length, in_memory, value} = segments.shift();
+				if( in_memory === true )
+				{
+					return { value: new Promise((resolve, reject)=>{
+						resolve(value);
+					}) };
+				}
 				return {value:new Promise((resolve, reject)=>{
 					fs.read(storage_fd, Buffer.alloc(length), 0, length, from, (err, numBytes, buff)=>{
 						if ( err ) {
@@ -65,46 +70,13 @@
 	}
 	class DBMutableCursor extends DBCursor {
 		constructor(dbCursor) {
+			if( !(dbCursor instanceof DBCursor) ) throw new Error(`The parameter should be a DBCursor!`);
 			super(null, []);
 			_DBCursor.set(this, _DBCursor.get(dbCursor));
 		}
 		get segments() {
 			return _DBCursor.get(this).segments;
 		}
-		updateCursor(updater) {
-			const {segments} = _DBCursor.get(this);
-			updater(segments);
-			_DBCursor.get(this).length = segments.length;
-		}
-		next() {
-			const { db:{storage_fd}, segments } = _DBCursor.get(this);
-			if ( segments.length > 0 ) {
-				let {key, from, length, in_memory, value} = segments.shift();
-				if( in_memory === true )
-				{
-					return { value: new Promise((resolve, reject)=>{
-						resolve(value);
-					}) };
-				}
-				return {value:new Promise((resolve, reject)=>{
-					fs.read(storage_fd, Buffer.alloc(length), 0, length, from, (err, numBytes, buff)=>{
-						if ( err ) {
-							return reject({_system:true, error:err});
-						}
-
-						if ( numBytes !== length ) {
-							return reject({_system:false, error:new Error("Not enough data!")});
-						}
-
-						resolve(JSON.parse(buff.toString('utf8')));
-					});
-				})};
-			}
-			else {
-				return {done:true};
-			}
-		}
-		[Symbol.iterator](){ return this; }
 	}
 	class LevelKV {
 		constructor() {
