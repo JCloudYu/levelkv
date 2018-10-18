@@ -36,8 +36,8 @@
 			
 			return results;
 		}
-		get size() 		{ return _DBCursor.get(this).segments.length; }
-		get length() 	{ return _DBCursor.get(this).segments.length; }
+		get size() 		{ const {segments} = _DBCursor.get(this); return segments.length; }
+		get length() 	{ const {segments} = _DBCursor.get(this); return segments.length; }
 		next() {
 			const { db:{storage_fd}, segments } = _DBCursor.get(this);
 			if ( segments.length > 0 ) {
@@ -76,7 +76,7 @@
 			_DBCursor.set(this, JSON.parse( JSON.stringify(_DBCursor.get(dbCursor)) ) );
 			_DBCursor.get(dbCursor).segments = [];
 		}
-		get segments() { return _DBCursor.get(this).segments; }
+		get segments() { const {segments} = _DBCursor.get(this); return segments; }
 	}
 	class LevelKV {
 		constructor() {
