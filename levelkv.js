@@ -23,7 +23,7 @@
 	class DBCursor {
 		constructor(db, segments) {
 			const PROPS = {
-				db: _LevelKV.get(db),
+				db: (this.constructor.name === 'DBCursor') ? _LevelKV.get(db): db,
 				segments
 			};
 			_DBCursor.set(this, PROPS);
@@ -72,8 +72,8 @@
 		constructor(dbCursor) {
 			if( !(dbCursor instanceof DBCursor) ) throw new Error(`The parameter should be a DBCursor!`);
 
-			super(null, []);
-			_DBCursor.set(this, JSON.parse( JSON.stringify(_DBCursor.get(dbCursor)) ) );
+			const {db, segments} = JSON.parse( JSON.stringify(_DBCursor.get(dbCursor)) );
+			super( db, segments );
 			_DBCursor.get(dbCursor).segments = [];
 		}
 		get segments() { const {segments} = _DBCursor.get(this); return segments; }
