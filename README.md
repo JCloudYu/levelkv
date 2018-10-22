@@ -41,7 +41,7 @@ for await( let value of result )
 
 
 // Use Mutable Cursor
-const dbCursor 			= await db.get();
+const dbCursor          = await db.get();
 const dbMutableCursor 	= new DBMutableCursor(dbCursor);
 const segments          = dbMutableCursor.segments;
 for( let segment of segments )
