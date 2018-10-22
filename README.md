@@ -11,19 +11,21 @@ A simple native Node.js implementation of the well-known key-value based LevelDB
 ## Examples ##
 ```javascript
 // Open a database
-const db = await require('levelkv').initFromPath('your_directory_path');
+const { LevelKV, DBMutableCursor } = require('levelkv');
+const db = await LevelKV.initFromPath('your_directory_path');
 
 
 let key = 'key';
 let value = { a:1, b:2, c:3 };
 
 // Add data
-await db.put( key, value );
+await db.put( `${key}`, value );
+await db.put( `${key}2`, value );
 
 // Get data
 let result = await db.get( key );
-console.log( await result.toArray() );
 console.log( result.length );
+console.log( await result.toArray() );
 
 
 // Delete data
@@ -35,6 +37,20 @@ for await( let value of result )
 {
     console.log( value );
 }
+
+
+
+// Use Mutable Cursor
+const dbCursor 			= await db.get();
+const dbMutableCursor 	= new DBMutableCursor(dbCursor);
+const segments          = dbMutableCursor.segments;
+for( let segment of segments )
+{
+    segment.in_memory = true;
+    segment.value = 'newValue';
+}
+console.log( await dbMutableCursor.toArray() );
+
 
 
 // Close the database
