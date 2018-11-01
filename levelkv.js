@@ -515,8 +515,7 @@
 		let data = [];
 		while( frag ){
 			const {from, length} = frag;
-			const item = content.slice(start, from);
-			data.push( item );
+			data.push( content.slice(start, from) );
 
 			start = from + length;
 			frag = frags.shift();
