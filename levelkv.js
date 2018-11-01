@@ -20,6 +20,8 @@
 	const DATA_IS_AVAILABLE 		= 0x01;
 	const DATA_IS_UNAVAILABLE 		= 0x00;
 
+	let _clearId = null;
+
 	class DBCursor {
 		constructor(db, segments) {
 			const PROPS = {
@@ -94,6 +96,7 @@
 		async close() {
 			const props = _LevelKV.get(this);
 			props.valid = false;
+			___CLEAR_REORGANIZE_FILES();
 
 			try {
 				await promisefy( fs.close, fs, props.index_segd_fd );
@@ -332,6 +335,9 @@
 			
 
 			PROPS.valid = true;
+			// INFO: Start to reorganize files
+			await ___REORGANIZE_FILES(PROPS);
+
 			return DB;
 		}
 	}
@@ -389,6 +395,98 @@
 
 		return {index: r_index, index_segd: r_index_segd};
 	}
+
+	async function ___UPDATE_INDEX(segd_fd, index_fd) {
+		const [stats] = await promisefy( fs.fstat, fs, segd_fd );
+		const segd_size = stats.size;
+
+		let rLen, buff 	= Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH), segd_pos = 0, prev = null;
+
+		const r_index 		= {};
+		const r_index_segd 	= {};
+		const remains 		= { segd: [], index:[] };
+		const removes 		= { segd: [], index: [], storage: [] };
+		const shift 		= { segd: 0, index: 0, storage: 0 };
+
+
+		while(segd_pos < segd_size) {
+			[rLen] = await promisefy( fs.read, fs, segd_fd, buff, 0, SEGMENT_DESCRIPTOR_LENGTH, segd_pos );
+
+			if ( rLen !== SEGMENT_DESCRIPTOR_LENGTH ) {
+				throw "Insufficient data in index segmentation descriptor!";
+			}
+
+			if ( !prev ) {
+				prev = Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH);
+			}
+			else
+			{
+				let pos 		= prev.readDoubleLE(0);
+				let length 		= buff.readDoubleLE(0) - pos;
+				let raw_index 	= Buffer.alloc(length);
+				[rLen] = await promisefy( fs.read, fs, index_fd, raw_index, 0, length, pos );
+				if ( rLen !== length ) {
+					throw "Insufficient data in index!";
+				}
+
+
+				let index_str = raw_index.toString();
+				let [key, position, len] = JSON.parse( index_str.slice(0, index_str.length - 1) );
+				let new_prev, new_buff;
+
+				if ( prev[SEGMENT_DESCRIPTOR_LENGTH - 1] ) {
+					const new_index = Buffer.from( JSON.stringify( [key, position + shift.storage, len] ) + '\n', 'utf8' );
+					const new_index_length = new_index.length;
+
+
+					r_index[key] 		= {from: position + shift.storage, 	length:len};
+					r_index_segd[key] 	= {from: pos + shift.index, 		length:new_index.length, segd_pos: segd_pos - SEGMENT_DESCRIPTOR_LENGTH + shift.segd};
+
+					new_prev = ___GEN_SEGD( pos + shift.index, DATA_IS_AVAILABLE );
+					new_buff = ___GEN_SEGD( pos + shift.index + new_index.length, DATA_IS_AVAILABLE );
+
+					remains.segd.push( new_prev );
+					remains.index.push( new_index );
+					shift.index -= length - new_index_length;
+
+				}
+				else {
+					removes.storage.push({
+						from: 	position,
+						length: len
+					});
+					shift.segd 		-= SEGMENT_DESCRIPTOR_LENGTH;
+					shift.index 	-= length;
+					shift.storage 	-= len;
+				}
+
+				if( ( new_buff && (segd_pos + SEGMENT_DESCRIPTOR_LENGTH === segd_size )) ){
+					remains.segd.push(new_buff);
+				}
+			}
+
+
+
+			let tmp = prev;
+			prev = buff;
+			buff = tmp;
+
+			segd_pos += SEGMENT_DESCRIPTOR_LENGTH;
+		}
+
+		if( segd_pos === SEGMENT_DESCRIPTOR_LENGTH || (-shift.segd === segd_size - SEGMENT_DESCRIPTOR_LENGTH) ) {
+			remains.segd.unshift( ___GEN_SEGD(0, DATA_IS_AVAILABLE) );
+		}
+
+
+
+		await promisefy( fs.ftruncate, fs, segd_fd );
+		await promisefy( fs.ftruncate, fs, index_fd );
+		await promisefy( fs.writeFile, fs, segd_fd, Buffer.concat( remains.segd ) );
+		await promisefy( fs.writeFile, fs, index_fd, Buffer.concat( remains.index ) );
+
+		return {index: r_index, index_segd: r_index_segd, removes};
+	}
 	async function ___OPEN_NEW_FILE(path) {
 		const [fd] = await promisefy( fs.open, fs, path, "a+" );
 		await promisefy( fs.close, fs, fd );
@@ -404,15 +502,70 @@
 	function ___GEN_DEFAULT_STATE() {
 		return {
 			version:1, total_records:0,
-			segd: { size: 0 },
+			segd: { size:0 },
 			index:{ size:0, frags:[] },
 			storage:{ size:0, frags:[] }
 		};
 	}
+	function ___GEN_SEGD(position, status){
+		const segd = Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH);
+		segd.writeDoubleLE(position, 0);
+		segd.writeUInt8(status, SEGMENT_DESCRIPTOR_LENGTH - 1);
+		return segd;
+	}
 
-	
-	
-	
+	async function ___REMOVE_CONTENT(fd, frags){
+		const [content] = await promisefy( fs.readFile, fs, fd );
+		let frag = frags.shift();
+		let start = 0;
+		let data = [];
+		while( frag ){
+			const {from, length} = frag;
+			const item = content.slice(start, from);
+			data.push( item );
+
+			start = from + length;
+			frag = frags.shift();
+		}
+
+		const item = content.slice( start );
+		data.push( item );
+
+		let result = Buffer.concat(data);
+		await promisefy( fs.ftruncate, fs, fd );
+		await promisefy( fs.writeFile, fs, fd, result );
+	}
+	async function ___REORGANIZE_FILES(props){
+		const {state, state_path, index_segd_fd, index_fd, storage_fd} = props;
+		const {index, index_segd, removes} =  await ___UPDATE_INDEX( index_segd_fd, index_fd );
+		await ___REMOVE_CONTENT(storage_fd, removes.storage);
+
+		props.index = index;
+		props.index_segd = index_segd;
+
+		state.total_records = Object.keys(index).length;
+		let [stats] = await promisefy( fs.fstat, fs, index_segd_fd );
+		state.segd.size = stats.size;
+
+		[stats] = await promisefy( fs.fstat, fs, index_fd );
+		state.index.size = stats.size;
+
+		[stats] = await promisefy( fs.fstat, fs, storage_fd );
+		state.storage.size = stats.size;
+
+		await promisefy( fs.writeFile, fs, state_path, JSON.stringify(state) );
+
+
+		_clearId = setTimeout(
+			___REORGANIZE_FILES.bind(null, props), 30000
+		);
+	}
+	function ___CLEAR_REORGANIZE_FILES(){
+		clearTimeout( _clearId );
+	}
+
+
+
 	/*
 	const PROP_MAP = new WeakMap();
 	class LevelKV {
