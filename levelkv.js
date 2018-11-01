@@ -433,7 +433,6 @@
 					const new_index = Buffer.from( JSON.stringify( [key, position + shift.storage, len] ) + '\n', 'utf8' );
 					const new_index_length = new_index.length;
 
-
 					r_index[key] 		= {from: position + shift.storage, 	length:len};
 					r_index_segd[key] 	= {from: pos + shift.index, 		length:new_index.length, segd_pos: segd_pos - SEGMENT_DESCRIPTOR_LENGTH + shift.segd};
 
@@ -522,9 +521,7 @@
 			start = from + length;
 			frag = frags.shift();
 		}
-
-		const item = content.slice( start );
-		data.push( item );
+		data.push( content.slice( start ) );
 
 		let result = Buffer.concat(data);
 		await promisefy( fs.ftruncate, fs, fd );
@@ -549,6 +546,7 @@
 		state.storage.size = stats.size;
 
 		await promisefy( fs.writeFile, fs, state_path, JSON.stringify(state) );
+
 
 
 		_clearId = setTimeout(
