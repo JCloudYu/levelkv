@@ -371,7 +371,7 @@
 
 
 				let index_str = raw_index.toString();
-				let { 0:key, 1:position, 2:len } = JSON.parse( index_str.slice(0, index_str.length - 1) );
+				let [key, position, len] = JSON.parse( index_str.slice(0, index_str.length - 1) );
 
 				r_index[key] 		= {from:position, 	length:len};
 				r_index_segd[key] 	= {from:pos, 		length:length, segd_pos: segd_pos - SEGMENT_DESCRIPTOR_LENGTH};
