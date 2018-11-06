@@ -180,6 +180,9 @@
 
 					// INFO: Mark the duplicate key
 					if ( prev_index ) {
+						state.index.frags.push({from: prev_segd.from, length: prev_segd.length});
+						state.storage.frags.push({from: prev_index.from, length: prev_index.length});
+
 						// INFO: Update segd
 						const segd = Buffer.alloc(1);
 						segd.writeUInt8(DATA_IS_UNAVAILABLE, 0);
@@ -224,6 +227,8 @@
 					const prev_index 	= index[key];
 					const prev_segd 	= index_segd[key];
 					if ( prev_index ) {
+						state.storage.frags.push({from: prev_index.from, length: prev_index.length});
+						state.index.frags.push({from: prev_index.from, length: prev_index.length});
 						delete index[key];
 
 						// INFO: Update segd
@@ -497,8 +502,8 @@
 		return {
 			version:1, total_records:0,
 			segd: { size:0 },
-			index:{ size:0 },
-			storage:{ size:0 }
+			index:{ size:0, frags:[] },
+			storage:{ size:0, frags:[] }
 		};
 	}
 	function ___GEN_SEGD(position, status){
