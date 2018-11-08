@@ -10,6 +10,7 @@
 	const fs		= require( 'fs' );
 	const path		= require( 'path' );
 	const promisefy = require( './lib/promisefy' );
+	const beson 	= require('beson');
 	
 	
 	
@@ -60,7 +61,7 @@
 							return reject({_system:false, error:new Error("Not enough data!")});
 						}
 						
-						resolve(JSON.parse(buff.toString('utf8')));
+						resolve(beson.Deserialize(buff));
 					});
 				})};
 			}
@@ -153,7 +154,7 @@
 					const prev_index 	= index[key];
 					const prev_segd 	= index_segd[key];
 
-					const data_raw 	= Buffer.from(JSON.stringify(val) + '\n', 'utf8');
+					const data_raw 	= Buffer.from(beson.Serialize(val));
 					const new_index = [key, state.storage.size, data_raw.length];
 					const index_raw = Buffer.from(JSON.stringify(new_index) + '\n', 'utf8');
 
