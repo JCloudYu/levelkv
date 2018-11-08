@@ -1,6 +1,6 @@
 {
 	"name": "levelkv",
-	"version": "0.1.5",
+	"version": "0.1.6",
 	"description": "A very simple level db native nodejs implementation",
 	"main": "levelkv.js",
 	"scripts": {
