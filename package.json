@@ -1,6 +1,6 @@
 {
 	"name": "levelkv",
-	"version": "0.1.6",
+	"version": "0.1.7",
 	"description": "A very simple level db native nodejs implementation",
 	"main": "levelkv.js",
 	"scripts": {
@@ -22,7 +22,7 @@
 	},
 	"homepage": "https://github.com/JCloudYu/levelkv#readme",
 	"dependencies": {
-		"beson": "^0.9.7",
+		"beson": "^0.9.10",
 		"tiinytiny": "^0.2.7"
 	}
 }
