@@ -22,7 +22,6 @@
 	},
 	"homepage": "https://github.com/JCloudYu/levelkv#readme",
 	"dependencies": {
-		"beson": "^0.9.10",
-		"tiinytiny": "^0.2.7"
+		"beson": "~0.9.10"
 	}
 }
