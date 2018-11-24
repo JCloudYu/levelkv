@@ -112,11 +112,10 @@
 		/**
 		 * Get data from the database.
 		 *
-		 * @async
 		 * @param {string|string[]} keys - A specific key or an array of keys to retrieve, if not given it will retrieve all data from the database.
-		 * @returns {Promise<DBCursor>} - Promise object represents the database cursor of the retrieved data.
+		 * @returns {DBCursor} - Promise object represents the database cursor of the retrieved data.
 		 */
-		async get(keys=[]) {
+		get(keys=[]) {
 			const {index, valid} = _LevelKV.get(this);
 			if( !valid ) throw new Error( 'Database is not available!' );
 
