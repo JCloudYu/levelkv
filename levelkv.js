@@ -155,7 +155,7 @@
 
 					const data_raw 	= Buffer.from(beson.Serialize(val));
 					const new_index = [key, state.storage.size, data_raw.length];
-					const index_raw = Buffer.from(JSON.stringify(new_index) + '\n', 'utf8');
+					const index_raw = Buffer.from(beson.Serialize(new_index), 'utf8');
 
 					const segd_size = state.segd.size;
 					const segd 		= Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH);
@@ -267,7 +267,7 @@
 			PROPS.state_path = `${DB_PATH}/state.json`;
 			try {
 				const [content] = await promisefy( fs.readFile, fs, PROPS.state_path );
-				PROPS.state = JSON.parse( content );
+			PROPS.state = JSON.parse( content );
 			}
 			catch(e) {
 				if ( !options.auto_create ) {
@@ -372,8 +372,7 @@
 				}
 
 
-				let index_str = raw_index.toString();
-				let [key, position, len] = JSON.parse( index_str.slice(0, index_str.length - 1) );
+				let [key, position, len] = beson.Deserialize( raw_index );
 
 				r_index[key] 		= {from:position, 	length:len};
 				r_index_segd[key] 	= {from:pos, 		length:length, segd_pos: segd_pos - SEGMENT_DESCRIPTOR_LENGTH};
