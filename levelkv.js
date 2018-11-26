@@ -11,7 +11,8 @@
 	const path		= require( 'path' );
 	const promisefy = require( './lib/promisefy' );
 	const beson 	= require('beson');
-	
+	const {Binary} 	= require('beson');
+
 	
 	
 	const _LevelKV  = new WeakMap();
@@ -125,6 +126,12 @@
 
 			const matches = [];
 			for( let key of keys ) {
+				// INFO: Cast typical data type to string
+				if( key instanceof Binary )
+					key = key.toString();
+				if( key instanceof ArrayBuffer )
+					key = Binary.from(key).toString();
+
 				if ( index[key] ) {
 					const data = index[key];
 					data.key = key;
@@ -150,6 +157,12 @@
 
 			try {
 				for( let key of keys ) {
+					// INFO: Cast typical data type to string
+					if( key instanceof Binary )
+						key = key.toString();
+					if( key instanceof ArrayBuffer )
+						key = Binary.from(key).toString();
+
 					const prev_index 	= index[key];
 					const prev_segd 	= index_segd[key];
 
@@ -223,6 +236,12 @@
 
 			try {
 				for( let key of keys ) {
+					// INFO: Cast typical data type to string
+					if( key instanceof Binary )
+						key = key.toString();
+					if( key instanceof ArrayBuffer )
+						key = Binary.from(key).toString();
+
 					const prev_index 	= index[key];
 					const prev_segd 	= index_segd[key];
 					if ( prev_index ) {
