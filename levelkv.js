@@ -10,8 +10,7 @@
 	const fs		= require( 'fs' );
 	const path		= require( 'path' );
 	const promisefy = require( './lib/promisefy' );
-	const beson 	= require('beson');
-	const {Binary} 	= require('beson');
+	const {Binary, Serialize, Deserialize} 	= require('beson');
 
 	
 	
@@ -62,7 +61,7 @@
 							return reject({_system:false, error:new Error("Not enough data!")});
 						}
 						
-						resolve(beson.Deserialize(buff));
+						resolve(Deserialize(buff));
 					});
 				})};
 			}
@@ -166,9 +165,9 @@
 					const prev_index 	= index[key];
 					const prev_segd 	= index_segd[key];
 
-					const data_raw 	= Buffer.from(beson.Serialize(val));
+					const data_raw 	= Buffer.from(Serialize(val));
 					const new_index = [key, state.storage.size, data_raw.length];
-					const index_raw = Buffer.from(beson.Serialize(new_index), 'utf8');
+					const index_raw = Buffer.from(Serialize(new_index), 'utf8');
 
 					const segd_size = state.segd.size;
 					const segd 		= Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH);
@@ -391,7 +390,7 @@
 				}
 
 
-				let [key, position, len] = beson.Deserialize( raw_index );
+				let [key, position, len] = Deserialize( raw_index );
 
 				r_index[key] 		= {from:position, 	length:len};
 				r_index_segd[key] 	= {from:pos, 		length:length, segd_pos: segd_pos - SEGMENT_DESCRIPTOR_LENGTH};
