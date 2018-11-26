@@ -23,7 +23,7 @@ await db.put( `${key}`, value );
 await db.put( `${key}2`, value );
 
 // Get data
-let result = await db.get( key );
+let result = db.get( key );
 console.log( result.length );
 console.log( await result.toArray() );
 
@@ -32,7 +32,7 @@ console.log( await result.toArray() );
 await db.del( key );
 
 // Get all data
-result = await db.get();
+result = db.get();
 for await( let value of result )
 {
     console.log( value );
@@ -41,7 +41,7 @@ for await( let value of result )
 
 
 // Use Mutable Cursor
-const dbCursor          = await db.get();
+const dbCursor          = db.get();
 const dbMutableCursor 	= new DBMutableCursor(dbCursor);
 const segments          = dbMutableCursor.segments;
 for( let segment of segments )
@@ -95,7 +95,7 @@ All the operations in LevelKV are asynchronous, remember to add `await` keyword 
  *
  * @async
  * @param {string|string[]} keys - A specific key or an array of keys to retrieve, if not given it will retrieve all data from the database.
- * @returns {Promise<DBCursor>} - Promise object represents the database cursor of the retrieved data.
+ * @returns {<DBCursor>} - Database cursor of the retrieved data.
  */
 .get(keys=[])
 ```

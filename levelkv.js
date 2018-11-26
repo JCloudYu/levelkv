@@ -113,7 +113,7 @@
 		 * Get data from the database.
 		 *
 		 * @param {string|string[]} keys - A specific key or an array of keys to retrieve, if not given it will retrieve all data from the database.
-		 * @returns {DBCursor} - Promise object represents the database cursor of the retrieved data.
+		 * @returns {DBCursor} - Database cursor of the retrieved data.
 		 */
 		get(keys=[]) {
 			const {index, valid} = _LevelKV.get(this);
