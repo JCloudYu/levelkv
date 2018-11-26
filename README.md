@@ -95,7 +95,7 @@ All the operations in LevelKV are asynchronous, remember to add `await` keyword 
  *
  * @async
  * @param {string|string[]} keys - A specific key or an array of keys to retrieve, if not given it will retrieve all data from the database.
- * @returns {<DBCursor>} - Database cursor of the retrieved data.
+ * @returns {DBCursor} - Database cursor of the retrieved data.
  */
 .get(keys=[])
 ```
