@@ -96,10 +96,13 @@
 		 */
 		async close() {
 			const props = _LevelKV.get(this);
+			const {RAS_INDEX, RAS_DATA} = _RAStorage.get(this);
 			props.valid = false;
 
 			try {
 				await promisefy( fs.close, fs, props.index_segd_fd );
+				await RAS_INDEX.close();
+				await RAS_DATA.close();
 			}
 			catch(e)
 			{
@@ -177,7 +180,7 @@
 
 
 
-			SEGD_TIMEOUT( ___UPDATE_SEGD.bind( null, index_segd_fd, index_segd, Object.keys(index).length ), 0 );
+			await ___UPDATE_SEGD( index_segd_fd, index_segd, Object.keys(index).length );
 		}
 
 		/**
@@ -217,7 +220,7 @@
 
 
 
-			SEGD_TIMEOUT( ___UPDATE_SEGD.bind( null, index_segd_fd, index_segd, Object.keys(index).length ), 0 );
+			await ___UPDATE_SEGD( index_segd_fd, index_segd, Object.keys(index).length );
 		}
 
 		/**
