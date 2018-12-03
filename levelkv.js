@@ -20,7 +20,6 @@
 	const _RAStorage 	= new WeakMap();
 
 	const SEGD_TIMEOUT 	= ___UNIQUE_TIMEOUT();
-	const STATE_TIMEOUT = ___UNIQUE_TIMEOUT();
 
 	const DEFAULT_PROCESSOR = {
 		serializer: (input)=>{ return Serialize(input); },
@@ -141,7 +140,7 @@
 		 * @param {*} val - The value to add.
 		 */
 		async put(keys=[], val) {
-			const {index_segd_fd, index_segd, index, state, state_path, valid} = _LevelKV.get(this);
+			const {index_segd_fd, index_segd, index, valid} = _LevelKV.get(this);
 			const {RAS_INDEX, RAS_DATA} = _RAStorage.get(this);
 			if( !valid ) throw new Error( 'Database is not available!' );
 
@@ -178,9 +177,7 @@
 
 
 
-			state.total_records = Object.keys(index).length;
-			STATE_TIMEOUT( ___UPDATE_STATE.bind( null, state_path, state ) );
-			SEGD_TIMEOUT( ___UPDATE_SEGD.bind( null, index_segd_fd, index_segd, state.total_records ), 0 );
+			SEGD_TIMEOUT( ___UPDATE_SEGD.bind( null, index_segd_fd, index_segd, Object.keys(index).length ), 0 );
 		}
 
 		/**
@@ -190,7 +187,7 @@
 		 * @param {string|string[]} keys -  A specific key or an array of keys to delete.
 		 */
 		async del(keys=[]) {
-			const {index_segd_fd, index, index_segd, state, state_path, valid} = _LevelKV.get(this);
+			const {index_segd_fd, index, index_segd, valid} = _LevelKV.get(this);
 			const {RAS_INDEX, RAS_DATA} = _RAStorage.get(this);
 			if( !valid ) throw new Error( 'Database is not available !' );
 
@@ -220,9 +217,7 @@
 
 
 
-			state.total_records = Object.keys(index).length;
-			STATE_TIMEOUT( ___UPDATE_STATE.bind( null, state_path, state ) );
-			SEGD_TIMEOUT( ___UPDATE_SEGD.bind( null, index_segd_fd, index_segd, state.total_records ), 0 );
+			SEGD_TIMEOUT( ___UPDATE_SEGD.bind( null, index_segd_fd, index_segd, Object.keys(index).length ), 0 );
 		}
 
 		/**
@@ -237,32 +232,9 @@
 			const DB_PATH 	= path.resolve(dir);
 			const DB 		= new LevelKV();
 			const PROPS		= _LevelKV.get(DB);
-
-
 			
 			await ___CREATE_DIR(DB_PATH);
 
-			// region [ Read DB States ]
-			PROPS.state_path = `${DB_PATH}/state.json`;
-			try {
-				const [content] = await promisefy( fs.readFile, fs, PROPS.state_path );
-				PROPS.state = JSON.parse( content );
-			}
-			catch(e) {
-				if ( !options.auto_create ) {
-					throw new Error(`Cannot read database state! (${PROPS.state_path})`);
-				}
-				else {
-					PROPS.state = ___GEN_DEFAULT_STATE();
-					try {
-						await promisefy( fs.writeFile, fs, PROPS.state_path, JSON.stringify(PROPS.state) );
-					}
-					catch(e) {
-						throw new Error(`Cannot write database state! (${PROPS.state_path})`);
-					}
-				}
-			}
-			// endregion
 
 
 			// region [ Prepare DB Initialization ]
@@ -291,7 +263,7 @@
 			PROPS.index_segd_path 	= `${DB_PATH}/index.segd`;
 			try {
 				[PROPS.index_segd_fd] = await promisefy( fs.open, fs, PROPS.index_segd_path, "r+" );
-				[PROPS.index, PROPS.index_segd] =  await ___READ_INDEX( PROPS.index_segd_fd, RAS_INDEX, PROPS.state.segd.size );
+				[PROPS.index, PROPS.index_segd] =  await ___READ_INDEX( PROPS.index_segd_fd, RAS_INDEX );
 			}
 			catch(e) {
 				PROPS.index 		= {};
@@ -315,11 +287,7 @@
 	
 	module.exports = { LevelKV, DBMutableCursor };
 	
-	
 
-	async function ___UPDATE_STATE(state_path, state) {
-		await promisefy( fs.writeFile, fs, state_path, JSON.stringify(state) );
-	}
 
 	async function ___UPDATE_SEGD(segd_fd, index_segd, total_records) {
 		await promisefy( fs.ftruncate, fs, segd_fd, total_records * SEGMENT_DESCRIPTOR_LENGTH );
@@ -331,7 +299,7 @@
 		for( const segd in index_segd ) {
 			if( !index_segd.hasOwnProperty( segd ) ) continue;
 
-			buff.writeUInt32LE( segd.indexId, 0 );
+			buff.writeUInt32LE( index_segd[segd].indexId, 0 );
 			await promisefy( fs.write, fs, segd_fd, buff, 0, buff.length, segd_pos );
 			segd_pos += SEGMENT_DESCRIPTOR_LENGTH;
 		}
@@ -347,8 +315,10 @@
 		}
 	}
 
-	// TODO: Read segd file directory.
-	async function ___READ_INDEX(segd_fd, ras_index, segd_size) {
+	async function ___READ_INDEX(segd_fd, ras_index) {
+		const [stats] = await promisefy( fs.fstat, fs, segd_fd );
+		const segd_size = stats.size;
+
 		let rLen, buff 	= Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH), segd_pos = 0;
 		const index = {};
 		const index_segd = {};
@@ -385,14 +355,6 @@
 		catch(e) {
 			throw new Error( `Cannot create the levelkv directory! (${e})` );
 		}
-	}
-	function ___GEN_DEFAULT_STATE() {
-		return {
-			version:1, total_records:0,
-			segd: { size:0 },
-			index:{ size:0 },
-			storage:{ size:0 }
-		};
 	}
 
 
