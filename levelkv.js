@@ -10,23 +10,32 @@
 	const fs		= require( 'fs' );
 	const path		= require( 'path' );
 	const promisefy = require( './lib/promisefy' );
+	const {RAStorage} = require( 'rastorage' );
 	const {Binary, Serialize, Deserialize} 	= require('beson');
 
-	
-	
-	const _LevelKV  = new WeakMap();
-	const _DBCursor = new WeakMap();
 
-	const SEGMENT_DESCRIPTOR_LENGTH = 9;
-	const DATA_IS_AVAILABLE 		= 0x01;
-	const DATA_IS_UNAVAILABLE 		= 0x00;
+	
+	const _LevelKV  	= new WeakMap();
+	const _DBCursor 	= new WeakMap();
+	const _RAStorage 	= new WeakMap();
+
+	const SEGD_TIMEOUT 	= ___UNIQUE_TIMEOUT();
+	const STATE_TIMEOUT = ___UNIQUE_TIMEOUT();
+
+	const DEFAULT_PROCESSOR = {
+		serializer: (input)=>{ return Serialize(input); },
+		deserializer: (input)=>{ return Deserialize(input); }
+	};
+
+
+	const SEGMENT_DESCRIPTOR_LENGTH = 4;
 
 
 
 	class DBCursor {
 		constructor(db, segments) {
 			const PROPS = {
-				db: (this.constructor.name === 'DBCursor') ? _LevelKV.get(db): db,
+				db: db,
 				segments
 			};
 			_DBCursor.set(this, PROPS);
@@ -42,27 +51,19 @@
 		get size() 		{ const {segments} = _DBCursor.get(this); return segments.length; }
 		get length() 	{ const {segments} = _DBCursor.get(this); return segments.length; }
 		next() {
-			const { db:{storage_fd}, segments } = _DBCursor.get(this);
+			const { db, segments } = _DBCursor.get(this);
+			const {RAS_DATA} = _RAStorage.get(db);
 			if ( segments.length > 0 ) {
-				let {key, from, length, in_memory, value} = segments.shift();
+				let {key, dataId, in_memory, value} = segments.shift();
 				if( in_memory === true )
 				{
 					return { value: new Promise((resolve, reject)=>{
 						resolve(value);
 					}) };
 				}
-				return {value:new Promise((resolve, reject)=>{
-					fs.read(storage_fd, Buffer.alloc(length), 0, length, from, (err, numBytes, buff)=>{
-						if ( err ) {
-							return reject({_system:true, error:err});
-						}
-						
-						if ( numBytes !== length ) {
-							return reject({_system:false, error:new Error("Not enough data!")});
-						}
-						
-						resolve(Deserialize(buff));
-					});
+				return {value:new Promise(async(resolve, reject)=>{
+					const result = await RAS_DATA.get(dataId);
+					resolve( result );
 				})};
 			}
 			else {
@@ -75,8 +76,8 @@
 		constructor(dbCursor) {
 			if( !(dbCursor instanceof DBCursor) ) throw new Error(`The parameter should be a DBCursor!`);
 
-			const {db, segments} = JSON.parse( JSON.stringify(_DBCursor.get(dbCursor)) );
-			super( db, segments );
+			const {db, segments} = _DBCursor.get(dbCursor);
+			super( db, Deserialize( Serialize(segments) ) );
 			_DBCursor.get(dbCursor).segments = [];
 		}
 		get segments() { const {segments} = _DBCursor.get(this); return segments; }
@@ -100,8 +101,6 @@
 
 			try {
 				await promisefy( fs.close, fs, props.index_segd_fd );
-				await promisefy( fs.close, fs, props.index_fd );
-				await promisefy( fs.close, fs, props.storage_fd );
 			}
 			catch(e)
 			{
@@ -126,16 +125,10 @@
 			const matches = [];
 			for( let key of keys ) {
 				// INFO: Cast typical data type to string
-				if( key instanceof Binary )
-					key = key.toString();
-				if( key instanceof ArrayBuffer )
-					key = Binary.from(key).toString();
+				if( key instanceof Binary ) key = key.toString();
+				if( key instanceof ArrayBuffer ) key = Binary.from(key).toString();
 
-				if ( index[key] ) {
-					const data = index[key];
-					data.key = key;
-					matches.push(index[key]);
-				}
+				if ( index[key] ) matches.push(index[key]);
 			}
 			return new DBCursor(this, matches);
 		}
@@ -148,7 +141,8 @@
 		 * @param {*} val - The value to add.
 		 */
 		async put(keys=[], val) {
-			const {storage_fd, index_fd, index_segd_fd, index_segd, index, state, state_path, valid} = _LevelKV.get(this);
+			const {index_segd_fd, index_segd, index, state, state_path, valid} = _LevelKV.get(this);
+			const {RAS_INDEX, RAS_DATA} = _RAStorage.get(this);
 			if( !valid ) throw new Error( 'Database is not available!' );
 
 
@@ -157,67 +151,36 @@
 			try {
 				for( let key of keys ) {
 					// INFO: Cast typical data type to string
-					if( key instanceof Binary )
-						key = key.toString();
-					if( key instanceof ArrayBuffer )
-						key = Binary.from(key).toString();
+					if( key instanceof Binary ) key = key.toString();
+					if( key instanceof ArrayBuffer ) key = Binary.from(key).toString();
 
 					const prev_index 	= index[key];
-					const prev_segd 	= index_segd[key];
-
-					const data_raw 	= Buffer.from(Serialize(val));
-					const new_index = [key, state.storage.size, data_raw.length];
-					const index_raw = Buffer.from(Serialize(new_index), 'utf8');
-
-					const segd_size = state.segd.size;
-					const segd 		= Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH);
-
-					const storage_pos 	= state.storage.size;
-					const index_pos 	= state.index.size;
-
-
-					state.storage.size += data_raw.length;
-					state.index.size += index_raw.length;
-
-					state.segd.size += SEGMENT_DESCRIPTOR_LENGTH;
-					segd.writeDoubleLE(state.index.size, 0);
-					segd.writeUInt8(DATA_IS_AVAILABLE, SEGMENT_DESCRIPTOR_LENGTH - 1);
-
-
-					// INFO: Update index
-					index[key] = {from: new_index[1], length: new_index[2]};
-					index_segd[key] = {from: state.index.size, length: index_raw.length, segd_pos: segd_size - SEGMENT_DESCRIPTOR_LENGTH};
-
 
 					// INFO: Mark the duplicate key
 					if ( prev_index ) {
-						state.index.frags.push({from: prev_segd.from, length: prev_segd.length});
-						state.storage.frags.push({from: prev_index.from, length: prev_index.length});
-
-						// INFO: Update segd
-						const segd = Buffer.alloc(1);
-						segd.writeUInt8(DATA_IS_UNAVAILABLE, 0);
-
-						await promisefy( fs.write, fs, index_segd_fd, segd, 0, 1, prev_segd.segd_pos + SEGMENT_DESCRIPTOR_LENGTH - 1 );
+						await RAS_DATA.set( prev_index.dataId, val );
 					}
+					else
+					{
+						const dataId 	= await RAS_DATA.put(val);
+						const new_index = [key, dataId];
+						const indexId 	= await RAS_INDEX.put(new_index);
 
-
-					// INFO: Write storage, index, and index segment descriptor
-					await promisefy( fs.write, fs, storage_fd, data_raw, 0, data_raw.length, storage_pos );
-					await promisefy( fs.write, fs, index_fd, index_raw, 0, index_raw.length, index_pos );
-					await promisefy( fs.write, fs, index_segd_fd, segd, 0, SEGMENT_DESCRIPTOR_LENGTH, segd_size );
+						index[key] 		= {key, dataId};
+						index_segd[key] = {indexId};
+					}
 				}
-
-
-
-				// INFO: Update state
-				state.total_records = Object.keys(index).length;
-				await promisefy( fs.writeFile, fs, state_path, JSON.stringify(state) );
 			}
 			catch(e)
 			{
 				throw new Error( `Cannot put data! (${e})` );
 			}
+
+
+
+			state.total_records = Object.keys(index).length;
+			STATE_TIMEOUT( ___UPDATE_STATE.bind( null, state_path, state ) );
+			SEGD_TIMEOUT( ___UPDATE_SEGD.bind( null, index_segd_fd, index_segd, state.total_records ), 0 );
 		}
 
 		/**
@@ -227,7 +190,8 @@
 		 * @param {string|string[]} keys -  A specific key or an array of keys to delete.
 		 */
 		async del(keys=[]) {
-			const {index_segd_fd, index_segd, index, state, state_path, valid} = _LevelKV.get(this);
+			const {index_segd_fd, index, index_segd, state, state_path, valid} = _LevelKV.get(this);
+			const {RAS_INDEX, RAS_DATA} = _RAStorage.get(this);
 			if( !valid ) throw new Error( 'Database is not available !' );
 
 
@@ -236,34 +200,29 @@
 			try {
 				for( let key of keys ) {
 					// INFO: Cast typical data type to string
-					if( key instanceof Binary )
-						key = key.toString();
-					if( key instanceof ArrayBuffer )
-						key = Binary.from(key).toString();
+					if( key instanceof Binary ) key = key.toString();
+					if( key instanceof ArrayBuffer ) key = Binary.from(key).toString();
 
 					const prev_index 	= index[key];
 					const prev_segd 	= index_segd[key];
 					if ( prev_index ) {
-						state.storage.frags.push({from: prev_index.from, length: prev_index.length});
-						state.index.frags.push({from: prev_index.from, length: prev_index.length});
 						delete index[key];
-
-						// INFO: Update segd
-						const segd = Buffer.alloc(1);
-						segd.writeUInt8(DATA_IS_UNAVAILABLE, 0);
-						await promisefy( fs.write, fs, index_segd_fd, segd, 0, 1, prev_segd.segd_pos + SEGMENT_DESCRIPTOR_LENGTH - 1 );
+						delete index_segd[key];
+						await RAS_DATA.del(prev_index.dataId);
+						await RAS_INDEX.del(prev_segd.indexId);
 					}
 				}
-
-
-				// INFO: Update state
-				state.total_records = Object.keys(index).length;
-				await promisefy( fs.writeFile, fs, state_path, JSON.stringify(state) );
 			}
 			catch(e)
 			{
 				throw new Error( `Cannot delete data! (${e})` );
 			}
+
+
+
+			state.total_records = Object.keys(index).length;
+			STATE_TIMEOUT( ___UPDATE_STATE.bind( null, state_path, state ) );
+			SEGD_TIMEOUT( ___UPDATE_SEGD.bind( null, index_segd_fd, index_segd, state.total_records ), 0 );
 		}
 
 		/**
@@ -275,17 +234,19 @@
 		 * @returns {Promise<LevelKV>} - Promise object represents the database itself.
 		 */
 		static async initFromPath(dir, options={auto_create:true}) {
-			const DB_PATH = path.resolve(dir);
-			const DB = new LevelKV();
-			const PROPS	= _LevelKV.get(DB);
+			const DB_PATH 	= path.resolve(dir);
+			const DB 		= new LevelKV();
+			const PROPS		= _LevelKV.get(DB);
+
+
 			
-			
-			
+			await ___CREATE_DIR(DB_PATH);
+
 			// region [ Read DB States ]
 			PROPS.state_path = `${DB_PATH}/state.json`;
 			try {
 				const [content] = await promisefy( fs.readFile, fs, PROPS.state_path );
-			PROPS.state = JSON.parse( content );
+				PROPS.state = JSON.parse( content );
 			}
 			catch(e) {
 				if ( !options.auto_create ) {
@@ -303,53 +264,49 @@
 			}
 			// endregion
 
+
+			// region [ Prepare DB Initialization ]
+			PROPS.index_path 		= `${DB_PATH}/index`;
+			PROPS.storage_path 		= `${DB_PATH}/storage`;
+			let RAS_INDEX, RAS_DATA;
+			try {
+				RAS_INDEX 	= await RAStorage.InitAtPath( PROPS.index_path );
+				RAS_DATA 	= await RAStorage.InitAtPath( PROPS.storage_path );
+
+				RAS_INDEX._serializer 	= DEFAULT_PROCESSOR.serializer;
+				RAS_INDEX._deserializer = DEFAULT_PROCESSOR.deserializer;
+
+				RAS_DATA._serializer 	= DEFAULT_PROCESSOR.serializer;
+				RAS_DATA._deserializer 	= DEFAULT_PROCESSOR.deserializer;
+
+				_RAStorage.set(DB, { RAS_INDEX, RAS_DATA });
+			}
+			catch(e) {
+				throw new Error( `Cannot initialize index and storage database! (${e})` );
+			}
+			// endregion
+
+
 			// region [ Read DB Index ]
-			PROPS.index_path 		= `${DB_PATH}/index.jlst`;
 			PROPS.index_segd_path 	= `${DB_PATH}/index.segd`;
-			PROPS.index_segd 		= {};
 			try {
-				[PROPS.index_fd] 		= await promisefy( fs.open, fs, PROPS.index_path, "r+" );
-				[PROPS.index_segd_fd] 	= await promisefy( fs.open, fs, PROPS.index_segd_path, "r+" );
-
-				const { index, index_segd } =  await ___READ_INDEX( PROPS.index_segd_fd, PROPS.index_fd );
-				PROPS.index 		= index;
-				PROPS.index_segd 	= index_segd;
+				[PROPS.index_segd_fd] = await promisefy( fs.open, fs, PROPS.index_segd_path, "r+" );
+				[PROPS.index, PROPS.index_segd] =  await ___READ_INDEX( PROPS.index_segd_fd, RAS_INDEX, PROPS.state.segd.size );
 			}
 			catch(e) {
-				PROPS.index = {};
-				PROPS.index_segd = {};
+				PROPS.index 		= {};
+				PROPS.index_segd 	= {};
 
 				try {
-					[PROPS.index_fd] 		= await ___OPEN_NEW_FILE( PROPS.index_path );
-					[PROPS.index_segd_fd] 	= await ___WRITE_IDNEX_SEGD(PROPS.index_segd_path);
-
-					const [stats] = await promisefy( fs.fstat, fs, PROPS.index_segd_fd );
-					PROPS.state.segd.size = stats.size;
-
-					await promisefy( fs.writeFile, fs, PROPS.state_path, JSON.stringify( PROPS.state ) );
+					[PROPS.index_segd_fd] = await ___OPEN_NEW_FILE(PROPS.index_segd_path);
 				}
 				catch(e) {
-					throw new Error(`Cannot write database main index! (${PROPS.index_path})`);
+					throw new Error(`Cannot read database main index! (${e})`);
 				}
 			}
 			// endregion
 
-			// region [ Prepare DB Storage ]
-			PROPS.storage_path = `${DB_PATH}/storage.jlst`;
-			try {
-				[PROPS.storage_fd] = await promisefy( fs.open, PROPS.storage_path, "r+" );
-			}
-			catch(e) {
-				try {
-					[PROPS.storage_fd] = await ___OPEN_NEW_FILE( PROPS.storage_path );
-				}
-				catch(e) {
-					throw new Error( `Cannot access database storage! (${PROPS.storage_path})` );
-				}
-			}
-			// endregion
-			
-			
+
 
 			PROPS.valid = true;
 			return DB;
@@ -359,15 +316,42 @@
 	module.exports = { LevelKV, DBMutableCursor };
 	
 	
-	
-	async function ___READ_INDEX(segd_fd, index_fd) {
-		const [stats] = await promisefy( fs.fstat, fs, segd_fd );
-		const segd_size = stats.size;
-		let rLen, buff 	= Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH), segd_pos = 0, prev = null;
 
-		const r_index = {};
-		const r_index_segd = {};
+	async function ___UPDATE_STATE(state_path, state) {
+		await promisefy( fs.writeFile, fs, state_path, JSON.stringify(state) );
+	}
 
+	async function ___UPDATE_SEGD(segd_fd, index_segd, total_records) {
+		await promisefy( fs.ftruncate, fs, segd_fd, total_records * SEGMENT_DESCRIPTOR_LENGTH );
+
+
+
+		let segd_pos = 0;
+		const buff = Buffer.alloc( SEGMENT_DESCRIPTOR_LENGTH );
+		for( const segd in index_segd ) {
+			if( !index_segd.hasOwnProperty( segd ) ) continue;
+
+			buff.writeUInt32LE( segd.indexId, 0 );
+			await promisefy( fs.write, fs, segd_fd, buff, 0, buff.length, segd_pos );
+			segd_pos += SEGMENT_DESCRIPTOR_LENGTH;
+		}
+	}
+
+	function ___UNIQUE_TIMEOUT() {
+		let hTimeout = null;
+		return (...args)=>{
+			if( hTimeout !== null ) {
+				try { clearTimeout( hTimeout ); } catch(e) {}
+			}
+			return (hTimeout = setTimeout( ...args ));
+		}
+	}
+
+	// TODO: Read segd file directory.
+	async function ___READ_INDEX(segd_fd, ras_index, segd_size) {
+		let rLen, buff 	= Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH), segd_pos = 0;
+		const index = {};
+		const index_segd = {};
 
 		while(segd_pos < segd_size) {
 			[rLen] = await promisefy( fs.read, fs, segd_fd, buff, 0, SEGMENT_DESCRIPTOR_LENGTH, segd_pos );
@@ -375,38 +359,18 @@
 				throw "Insufficient data in index segmentation descriptor!";
 			}
 
-			if ( !prev ) {
-				prev = Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH);
-			}
-			else
-			if ( prev[SEGMENT_DESCRIPTOR_LENGTH - 1] ) {
-				let pos 		= prev.readDoubleLE(0);
-				let length 		= buff.readDoubleLE(0) - pos;
-
-				let raw_index 	= Buffer.alloc(length);
-				[rLen] = await promisefy( fs.read, fs, index_fd, raw_index, 0, length, pos );
-				if ( rLen !== length ) {
-					throw "Insufficient data in index!";
-				}
+			const indexId 		= buff.readUInt32LE( 0 );
+			const [key, dataId] = await ras_index.get( indexId );
 
 
-				let [key, position, len] = Deserialize( raw_index );
-
-				r_index[key] 		= {from:position, 	length:len};
-				r_index_segd[key] 	= {from:pos, 		length:length, segd_pos: segd_pos - SEGMENT_DESCRIPTOR_LENGTH};
-			}
-
-
-
-			let tmp = prev;
-			prev = buff;
-			buff = tmp;
+			index[key] 		= {key, dataId};
+			index_segd[key] = {indexId};
 
 			segd_pos += SEGMENT_DESCRIPTOR_LENGTH;
 		}
 
 
-		return {index: r_index, index_segd: r_index_segd};
+		return [index, index_segd];
 	}
 
 	async function ___OPEN_NEW_FILE(path) {
@@ -414,26 +378,21 @@
 		await promisefy( fs.close, fs, fd );
 		return await promisefy( fs.open, fs, path, "r+" );
 	}
-	async function ___WRITE_IDNEX_SEGD(index_segd_path) {
-		let segd = Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH);
-		segd.writeDoubleLE(0, 0);
-		segd.writeUInt8(DATA_IS_AVAILABLE, SEGMENT_DESCRIPTOR_LENGTH - 1);
-		await promisefy( fs.appendFile, fs, index_segd_path, segd );
-		return await promisefy( fs.open, fs, index_segd_path, "r+" );
+	async function ___CREATE_DIR(dir) {
+		try {
+			await promisefy( fs.mkdir, fs, dir, { recursive: true } );
+		}
+		catch(e) {
+			throw new Error( `Cannot create the levelkv directory! (${e})` );
+		}
 	}
 	function ___GEN_DEFAULT_STATE() {
 		return {
 			version:1, total_records:0,
 			segd: { size:0 },
-			index:{ size:0, frags:[] },
-			storage:{ size:0, frags:[] }
+			index:{ size:0 },
+			storage:{ size:0 }
 		};
-	}
-	function ___GEN_SEGD(position, status){
-		const segd = Buffer.alloc(SEGMENT_DESCRIPTOR_LENGTH);
-		segd.writeDoubleLE(position, 0);
-		segd.writeUInt8(status, SEGMENT_DESCRIPTOR_LENGTH - 1);
-		return segd;
 	}
 
 
