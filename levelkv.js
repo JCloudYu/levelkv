@@ -233,7 +233,7 @@
 				RAS_INDEX._deserializer = DEFAULT_PROCESSOR.deserializer;
 			}
 			catch(e) {
-				throw new Error( `Cannot read database main index! (${e})` );
+				throw new Error( `Cannot access database main index! (${e})` );
 			}
 			// endregion
 
