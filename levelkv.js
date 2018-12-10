@@ -457,7 +457,6 @@
 		const {key, data} = op;
 		
 		let index = await ___GET_INDEX(inst, key);
-		console.log(key, data.byteLength, index);
 		if ( index !== null ) {
 			await _hData.set(index, data);
 		}
@@ -487,6 +486,8 @@
 			PRIVATE._hIndex.close()
 		]);
 		
+		clearInterval(PRIVATE._close_lock);
+		PRIVATE._close_lock = null;
 		PRIVATE._hData = PRIVATE._hIndex = PRIVATE._storage_path =
 		PRIVATE._index_path = PRIVATE._storage_path = PRIVATE._root_index = null;
 		PRIVATE._db_status = DB_STATUS.CLOSED;
