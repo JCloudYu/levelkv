@@ -474,7 +474,7 @@
 		
 		
 		
-		let results = await PromiseWaitAll(promises);
+		let results = await PromiseWaitAll(promises).catch(r=>r);
 		for(let {resolved, seq, result} of results) {
 			const {resolve, reject} = op_res_queue[seq];
 			(resolved?resolve:reject)(result)
@@ -513,7 +513,6 @@
 		}
 		
 		await ___DEL_INDEX(inst, key);
-		
 	}
 	async function ___DB_OP_CLOSE(inst) {
 		const PRIVATE = _REL_MAP.get(inst);
