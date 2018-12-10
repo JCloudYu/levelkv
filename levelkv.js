@@ -81,14 +81,23 @@
 		[Symbol.iterator](){ return this; }
 	}
 	class DBMutableCursor extends DBCursor {
-		constructor(dbCursor) {
-			if( !(dbCursor instanceof DBCursor) ) throw new Error(`The parameter should be a DBCursor!`);
-
-			const {db, segments} = _REL_MAP.get(dbCursor);
-			super( db, Deserialize( Serialize(segments) ) );
-			_REL_MAP.get(dbCursor).segments = [];
-		}
 		get segments() { const {segments} = _REL_MAP.get(this); return segments; }
+		next() {
+			const {db, segments} = _REL_MAP.get(this);
+			const {_op_throttle} = _REL_MAP.get(db);
+			if ( segments.length > 0 ) {
+				let {dataId, in_memory, value} = segments.shift();
+
+				if ( in_memory === true ) {
+					return {value:Promise.resolve(value)};
+				}
+
+				return { value: _op_throttle.push({op:DB_OP.FETCH, id: dataId}) };
+			}
+			else {
+				return {done:true};
+			}
+		}
 	}
 	class LevelKV {
 		constructor() {
