@@ -86,13 +86,12 @@
 			const {db, segments} = _REL_MAP.get(this);
 			const {_op_throttle} = _REL_MAP.get(db);
 			if ( segments.length > 0 ) {
-				let {dataId, in_memory, value} = segments.shift();
-
-				if ( in_memory === true ) {
-					return {value:Promise.resolve(value)};
+				let {_id:dataId, _in:internal=false, _v} = segments.shift();
+				if ( !internal ) {
+					return {value:Promise.resolve(_v)};
 				}
 
-				return { value: _op_throttle.push({op:DB_OP.FETCH, id: dataId}) };
+				return { value: _op_throttle.push({op:DB_OP.FETCH, id:dataId}) };
 			}
 			else {
 				return {done:true};
@@ -192,7 +191,7 @@
 					}
 					else {
 						newMatches.push({
-							key:reserved_keys.shift(), dataId
+							_in:true, key:reserved_keys.shift(), _id:dataId
 						});
 					}
 				}
