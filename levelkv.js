@@ -70,19 +70,9 @@
 		get length() 	{ const {segments} = _REL_MAP.get(this); return segments.length; }
 		next() {
 			const {db, segments} = _REL_MAP.get(this);
-			const {_hData:RAS_DATA} = _REL_MAP.get(db);
+			const {_op_throttle} = _REL_MAP.get(db);
 			if ( segments.length > 0 ) {
-				let {key, dataId, in_memory, value} = segments.shift();
-				if( in_memory === true ) {
-					return { value: new Promise((resolve, reject)=>{
-						resolve(value);
-					}) };
-				}
-
-				return {value:new Promise(async(resolve, reject)=>{
-					const result = await RAS_DATA.get(dataId);
-					resolve( result );
-				})};
+				return { value: _op_throttle.push({op:DB_OP.FETCH, id: segments.shift()}) };
 			}
 			else {
 				return {done:true};
@@ -149,9 +139,11 @@
 		 * Get data from the database.
 		 *
 		 * @param {string|string[]} keys - A specific key or an array of keys to retrieve, if not given it will retrieve all data from the database.
+		 * @param {Object} options
+		 * @param {Boolean} [options.mutable_cursor=false]
 		 * @returns {Promise<DBCursor>} - Database cursor of the retrieved data.
 		 */
-		get(keys=[]) {
+		get(keys=[], options={mutable_cursor:false}) {
 			const {_op_throttle, _db_status} = _REL_MAP.get(this);
 			if ( _db_status !== DB_STATUS.OK ) {
 				throw new LevelKVError(LevelKVError.DB_CLOSING_ERROR);
@@ -162,24 +154,47 @@
 			
 			const promises = [];
 			const registered = new Map();
+			const reserved_keys = [];
 			for(let key of keys) {
 				let prev = registered.get(key);
-				if ( prev ) {
-					promises.push(prev);
-					continue;
-				}
-				
+				if ( prev ) { continue; }
+
 				const p = _op_throttle.push({op:DB_OP.FETCH_INDEX, key:key.toString()});
-				registered.set(key, p.promise);
+				registered.set(key, p);
+				promises.push(p);
+				reserved_keys.push(key);
 			}
-			
+
 			if ( promises.length <= 0 ) {
 				return Promise.resolve(new DBCursor(this, []));
 			}
-			
-			
+
+
 			return Promise.all(promises).then((matches)=>{
-				return new DBCursor(this, matches);
+				let newMatches = [];
+				for( let i=0; i < matches.length; i++ ) {
+					let dataId = matches[i];
+					if ( dataId === null ) {continue;}
+
+
+
+					if (!options.mutable_cursor) {
+						newMatches.push(dataId);
+					}
+					else {
+						newMatches.push({
+							key:reserved_keys.shift(), dataId
+						});
+					}
+				}
+
+
+				if (!options.mutable_cursor) {
+					return new DBCursor(this, newMatches);
+				}
+				else {
+					return new DBMutableCursor(this, newMatches);
+				}
 			});
 		}
 
@@ -211,7 +226,8 @@
 				
 				
 				const p = _op_throttle.push({op:DB_OP.PUT, key:key.toString(), data:serialized_val});
-				registered.set(key, p.promise);
+				registered.set(key, p);
+				promises.push(p);
 			}
 			
 			
@@ -248,7 +264,8 @@
 				}
 				
 				const p = _op_throttle.push({op:DB_OP.DEL, key:key.toString()});
-				registered.set(key, p.promise);
+				registered.set(key, p);
+				promises.push(p);
 			}
 			
 			if ( promises.length <= 0 ) {
@@ -296,8 +313,8 @@
 			PRIVATE._storage_path = `${DB_PATH}/storage`;
 			try {
 				DATA_STORAGE = await RAStorage.InitAtPath( PRIVATE._storage_path );
-				INDEX_STORAGE._serializer = Serialize;
-				INDEX_STORAGE._deserializer = Deserialize;
+				//DATA_STORAGE._serializer = Serialize;
+				DATA_STORAGE._deserializer = Deserialize;
 				
 				PRIVATE._hData	= DATA_STORAGE;
 			}
@@ -364,6 +381,21 @@
 			const op_req = queue.shift();
 			const {info, ctrl} = op_req;
 			switch(info.op) {
+
+				case DB_OP.FETCH_INDEX:
+				{
+					const lock = locker.get(info.key)|0;
+					if ( lock > DB_OP_LOCK.READ ) {
+						push_back.push(op_req);
+					}
+					else {
+						locker.set(info.key, DB_OP_LOCK.READ);
+						promises.push(___DB_OP_FETCH_INDEX(inst, info));
+						op_res_queue.push(ctrl);
+					}
+					break;
+				}
+
 				case DB_OP.FETCH:
 				{
 					const lock = locker.get(info.key)|0;
@@ -375,7 +407,7 @@
 						promises.push(___DB_OP_FETCH(inst, info));
 						op_res_queue.push(ctrl);
 					}
-				
+
 					break;
 				}
 				
@@ -441,16 +473,13 @@
 		}
 	}
 	async function ___DB_OP_FETCH(inst, op) {
-		const {_root_index, _hData} = _REL_MAP.get(inst);
-		const {key} = op;
-		
-		
+		const {_hData} = _REL_MAP.get(inst);
+		const {id} = op;
+		return await _hData.get(id);
 	}
 	async function ___DB_OP_FETCH_INDEX(inst, op) {
-		const {_root_index, _hData} = _REL_MAP.get(inst);
 		const {key} = op;
-		
-		
+		return await ___GET_INDEX(inst, key);
 	}
 	async function ___DB_OP_PUT(inst, op) {
 		const {_hData} = _REL_MAP.get(inst);
