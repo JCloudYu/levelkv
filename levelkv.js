@@ -7,32 +7,56 @@
 (()=>{
 	"use strict";
 	
-	const path			= require( 'path' );
-	const {RAStorage} 	= require( 'rastorage' );
-	const {Binary, Serialize, Deserialize} 	= require('beson');
-
-
+	const path = require( 'path' );
+	const {RAStorage} = require( 'rastorage' );
+	const {ThrottledQueue, PromiseWaitAll, LevelKVError, Hash:{djb2a}} = require( './lib' );
+	const {Serialize, Deserialize} 	= require('beson');
 	
-	const _LevelKV  	= new WeakMap();
-	const _DBCursor 	= new WeakMap();
-	const _RAStorage 	= new WeakMap();
-
-	const DEFAULT_PROCESSOR = {
-		serializer: (input)=>{ return Serialize(input); },
-		deserializer: (input)=>{ return Deserialize(input); }
+	
+	
+	const _REL_MAP = new WeakMap();
+	const DB_STATUS = {
+		OK: 0,
+		CLOSING: 1,
+		CLOSED: 2
 	};
-
-	const INDEX_BLOCK = 1;
+	const INDEX_BLOCK_POS = {
+		DB_STATE: 1,
+		ROOT_INDEX: 2
+	};
+	
+	const DB_OP = {
+		FETCH_INDEX: 'FETCH_INDEX',
+		FETCH:	'FETCH',
+		PUT:	'PUT',
+		DEL:	'DEL',
+		CLOSE:	'CLOSE'
+	};
+	const DB_OP_LOCK = {
+		NONE:	0,
+		READ:	1,
+		WRITE:	2,
+		ALL:	3
+	};
+	
+	const INDEX_OP = {
+		GET: 'GET',
+		ADD: 'ADD',
+		DEL: 'DEL'
+	};
+	const INDEX_LOCK = {
+		NONE:	0,
+		READ:	1,
+		WRITE:	2
+	};
 
 
 
 	class DBCursor {
 		constructor(db, segments) {
-			const PROPS = {
-				db: db,
-				segments
-			};
-			_DBCursor.set(this, PROPS);
+			_REL_MAP.set(this, {
+				db, segments
+			});
 		}
 		async toArray() {
 			const results = [];
@@ -42,15 +66,14 @@
 			
 			return results;
 		}
-		get size() 		{ const {segments} = _DBCursor.get(this); return segments.length; }
-		get length() 	{ const {segments} = _DBCursor.get(this); return segments.length; }
+		get size() 		{ const {segments} = _REL_MAP.get(this); return segments.length; }
+		get length() 	{ const {segments} = _REL_MAP.get(this); return segments.length; }
 		next() {
-			const { db, segments } = _DBCursor.get(this);
-			const {RAS_DATA} = _RAStorage.get(db);
+			const {db, segments} = _REL_MAP.get(this);
+			const {_hData:RAS_DATA} = _REL_MAP.get(db);
 			if ( segments.length > 0 ) {
 				let {key, dataId, in_memory, value} = segments.shift();
-				if( in_memory === true )
-				{
+				if( in_memory === true ) {
 					return { value: new Promise((resolve, reject)=>{
 						resolve(value);
 					}) };
@@ -71,36 +94,54 @@
 		constructor(dbCursor) {
 			if( !(dbCursor instanceof DBCursor) ) throw new Error(`The parameter should be a DBCursor!`);
 
-			const {db, segments} = _DBCursor.get(dbCursor);
+			const {db, segments} = _REL_MAP.get(dbCursor);
 			super( db, Deserialize( Serialize(segments) ) );
-			_DBCursor.get(dbCursor).segments = [];
+			_REL_MAP.get(dbCursor).segments = [];
 		}
-		get segments() { const {segments} = _DBCursor.get(this); return segments; }
+		get segments() { const {segments} = _REL_MAP.get(this); return segments; }
 	}
 	class LevelKV {
 		constructor() {
-			const PROPS = {};
-			_LevelKV.set(this, PROPS);
-
-			PROPS.valid = false;
+			_REL_MAP.set(this, {
+				_dirty:false,
+				
+				_db_status:DB_STATUS.CLOSED,
+				_storage_path:null,
+				_index_path:null,
+				_hIndex:null,		// Handle
+				_hData:null,		// Handle
+				_state:null,
+				_root_index:null,
+				
+				_op_throttle: ThrottledQueue.CreateQueueWithConsumer(___THROTTLE_TIMEOUT.bind(null, this)),
+				_index_op_throttle: ThrottledQueue.CreateQueueWithConsumer(___INDEX_THROTTLE_TIMEOUT.bind(null, this)),
+				
+				_close_lock:setInterval(()=>{}, 86400)
+			});
 		}
 
 		/**
 		 * Close the database.
 		 *
-		 * @async
-		 */
-		async close() {
-			_LevelKV.get(this).valid = false;
-			const {RAS_INDEX, RAS_DATA} = _RAStorage.get(this);
-
-			try {
-				await RAS_INDEX.close();
-				await RAS_DATA.close();
-			}
-			catch(e)
-			{
-				throw new Error( `An error occurs when closing the database! (${e})` );
+		 * @returns Promise
+		**/
+		close() {
+			const PRIVATE = _REL_MAP.get(this);
+			switch( PRIVATE._db_status ) {
+				case DB_STATUS.OK:
+				{
+					PRIVATE._db_status = DB_STATUS.CLOSING;
+				
+					const p = PRIVATE._op_throttle.push({op:DB_OP.CLOSE});
+					return p.promise;
+				}
+				
+				case DB_STATUS.CLOSING:
+					return Promise.reject(new LevelKVError( LevelKVError.DB_DUPLICATED_CLOSE_ERROR ));
+				
+				case DB_STATUS.CLOSED:
+				default:
+					return Promise.resolve();
 			}
 		}
 
@@ -108,105 +149,113 @@
 		 * Get data from the database.
 		 *
 		 * @param {string|string[]} keys - A specific key or an array of keys to retrieve, if not given it will retrieve all data from the database.
-		 * @returns {DBCursor} - Database cursor of the retrieved data.
+		 * @returns {Promise<DBCursor>} - Database cursor of the retrieved data.
 		 */
 		get(keys=[]) {
-			const {index, valid} = _LevelKV.get(this);
-			if( !valid ) throw new Error( 'Database is not available!' );
-
-
-			if ( !Array.isArray(keys) ) { keys = [keys]; }
-			if( !keys.length ) keys = Object.keys(index);
-
-			const matches = [];
-			for( let key of keys ) {
-				// INFO: Cast typical data type to string
-				if( key instanceof Binary ) key = key.toString();
-				if( key instanceof ArrayBuffer ) key = Binary.from(key).toString();
-
-				if ( index[key] ) matches.push(index[key]);
+			const {_op_throttle, _db_status} = _REL_MAP.get(this);
+			if ( _db_status !== DB_STATUS.OK ) {
+				throw new LevelKVError(LevelKVError.DB_CLOSING_ERROR);
 			}
-			return new DBCursor(this, matches);
+			if ( !Array.isArray(keys) ) { keys = [keys]; }
+			
+			
+			
+			const promises = [];
+			const registered = new Map();
+			for(let key of keys) {
+				let prev = registered.get(key);
+				if ( prev ) {
+					promises.push(prev);
+					continue;
+				}
+				
+				const p = _op_throttle.push({op:DB_OP.FETCH_INDEX, key:key.toString()});
+				registered.set(key, p.promise);
+			}
+			
+			if ( promises.length <= 0 ) {
+				return Promise.resolve(new DBCursor(this, []));
+			}
+			
+			
+			return Promise.all(promises).then((matches)=>{
+				return new DBCursor(this, matches);
+			});
 		}
 
 		/**
 		 * Add data to the database.
 		 *
-		 * @async
 		 * @param {string|string[]} keys - A specific key or an array of keys to add.
 		 * @param {*} val - The value to add.
-		 */
-		async put(keys=[], val) {
-			const {index, valid} = _LevelKV.get(this);
-			const {RAS_INDEX, RAS_DATA} = _RAStorage.get(this);
-			if( !valid ) throw new Error( 'Database is not available!' );
-
-
+		 * @returns Promise
+		**/
+		put(keys=[], val) {
+			const {_op_throttle, _db_status} = _REL_MAP.get(this);
+			if ( _db_status !== DB_STATUS.OK ) {
+				throw new LevelKVError(LevelKVError.DB_CLOSING_ERROR);
+			}
 			if ( !Array.isArray(keys) ) { keys = [keys]; }
-
-			try {
-				for( let key of keys ) {
-					// INFO: Cast typical data type to string
-					if( key instanceof Binary ) key = key.toString();
-					if( key instanceof ArrayBuffer ) key = Binary.from(key).toString();
-
-					// INFO: Mark the duplicate key
-					const prev_index = index[key];
-					if ( prev_index ) {
-						await RAS_DATA.set( prev_index.dataId, val );
-					}
-					else
-					{
-						const dataId 	= await RAS_DATA.put(val);
-						index[key] 		= {key, dataId};
-					}
+		
+		
+			
+			const serialized_val = Serialize(val);
+			const promises = [];
+			const registered = new Map();
+			for(let key of keys) {
+				let prev = registered.get(key);
+				if ( prev ) {
+					promises.push(prev);
+					continue;
 				}
+				
+				
+				const p = _op_throttle.push({op:DB_OP.PUT, key:key.toString(), data:serialized_val});
+				registered.set(key, p.promise);
 			}
-			catch(e)
-			{
-				throw new Error( `Cannot put data! (${e})` );
+			
+			
+			
+			if ( promises.length <= 0 ) {
+				return Promise.resolve();
 			}
-
-
-
-			await RAS_INDEX.set( INDEX_BLOCK, index );
+			
+			return PromiseWaitAll(promises);
 		}
 
 		/**
 		 * Delete data from the database.
 		 *
-		 * @async
 		 * @param {string|string[]} keys -  A specific key or an array of keys to delete.
-		 */
-		async del(keys=[]) {
-			const {index, valid} = _LevelKV.get(this);
-			const {RAS_INDEX, RAS_DATA} = _RAStorage.get(this);
-			if( !valid ) throw new Error( 'Database is not available !' );
-
-
+		 * @returns Promise
+		**/
+		del(keys=[]) {
+			const {_op_throttle, _db_status} = _REL_MAP.get(this);
+			if ( _db_status !== DB_STATUS.OK ) {
+				throw new LevelKVError(LevelKVError.DB_CLOSING_ERROR);
+			}
 			if ( !Array.isArray(keys) ) { keys = [keys]; }
-
-			try {
-				for( let key of keys ) {
-					// INFO: Cast typical data type to string
-					if( key instanceof Binary ) key = key.toString();
-					if( key instanceof ArrayBuffer ) key = Binary.from(key).toString();
-
-					const prev_index 	= index[key];
-					if ( prev_index ) {
-						delete index[key];
-						await RAS_DATA.del(prev_index.dataId);
-					}
+		
+		
+		
+			const promises = [];
+			const registered = new Map();
+			for(let key of keys) {
+				let prev = registered.get(key);
+				if ( prev ) {
+					promises.push(prev);
+					continue;
 				}
+				
+				const p = _op_throttle.push({op:DB_OP.DEL, key:key.toString()});
+				registered.set(key, p.promise);
 			}
-			catch(e)
-			{
-				throw new Error( `Cannot delete data! (${e})` );
+			
+			if ( promises.length <= 0 ) {
+				return Promise.resolve();
 			}
-
-
-
-			await RAS_INDEX.set( INDEX_BLOCK, index );
+			
+			return PromiseWaitAll(promises);
 		}
 
 		/**
@@ -216,120 +265,410 @@
 		 * @param {string} dir - Directory path of the database. Make sure you have created or it will fail if the directory does not exist.
 		 * @param {object} options - Database creating options. Defaults to {auto_create:true}, which means create a new database automatically if not exist.
 		 * @returns {Promise<LevelKV>} - Promise object represents the database itself.
-		 */
+		**/
 		static async initFromPath(dir, options={auto_create:true}) {
-			const DB_PATH 	= path.resolve(dir);
-			const DB 		= new LevelKV();
-			const PROPS		= _LevelKV.get(DB);
-			let RAS_INDEX, RAS_DATA;
-
-
+			const DB_PATH = path.resolve(dir);
+			const DB = new LevelKV();
+			const PRIVATE = _REL_MAP.get(DB);
+			
+			
+			
+			
+			let INDEX_STORAGE, DATA_STORAGE;
 
 			// region [ Prepare DB Index ]
-			PROPS.index_path = `${DB_PATH}/index`;
+			PRIVATE._index_path = `${DB_PATH}/index`;
 			try {
-				RAS_INDEX 				= await RAStorage.InitAtPath( PROPS.index_path );
-				RAS_INDEX._serializer 	= DEFAULT_PROCESSOR.serializer;
-				RAS_INDEX._deserializer = DEFAULT_PROCESSOR.deserializer;
+				INDEX_STORAGE = await RAStorage.InitAtPath( PRIVATE._index_path );
+				INDEX_STORAGE._serializer = Serialize;
+				INDEX_STORAGE._deserializer = Deserialize;
+				
+				PRIVATE._hIndex	= INDEX_STORAGE;
 			}
 			catch(e) {
-				throw new Error( `Cannot access database main index! (${e})` );
+				const error = new LevelKVError(LevelKVError.DB_INDEX_INIT);
+				error.details.push(e);
+				throw error;
 			}
 			// endregion
 
 			// region [ Prepare DB Storage ]
-			PROPS.storage_path = `${DB_PATH}/storage`;
+			PRIVATE._storage_path = `${DB_PATH}/storage`;
 			try {
-				RAS_DATA 				= await RAStorage.InitAtPath( PROPS.storage_path );
-				RAS_DATA._serializer 	= DEFAULT_PROCESSOR.serializer;
-				RAS_DATA._deserializer 	= DEFAULT_PROCESSOR.deserializer;
+				DATA_STORAGE = await RAStorage.InitAtPath( PRIVATE._storage_path );
+				INDEX_STORAGE._serializer = Serialize;
+				INDEX_STORAGE._deserializer = Deserialize;
+				
+				PRIVATE._hData	= DATA_STORAGE;
 			}
 			catch(e) {
-				throw new Error( `Cannot access database storage! (${e})` );
+				const error = new LevelKVError(LevelKVError.DB_STORAGE_INIT);
+				error.details.push(e);
+				throw error;
 			}
 			// endregion
-
-
-
-			// region [ Read DB Index ]
+			
+			// region [ Load & Construct DB Index ]
 			try {
-				let index = await RAS_INDEX.get( INDEX_BLOCK );
-				PROPS.index = index;
-
-				if( !index ) {
-					PROPS.index = {};
-					await RAS_INDEX.put( PROPS.index );
+				let db_state = await INDEX_STORAGE.get( INDEX_BLOCK_POS.DB_STATE );
+				if ( !db_state ) {
+					db_state = {create:Date.now()};
+					await INDEX_STORAGE.put(db_state);
 				}
+				
+				let root_indices = await INDEX_STORAGE.get( INDEX_BLOCK_POS.ROOT_INDEX );
+				if ( !root_indices ) {
+					root_indices = [];
+					await INDEX_STORAGE.put(root_indices);
+				}
+				
+				const db_root_index = new Map();
+				for( let i=0; i<root_indices.length; i++ ) {
+					let [hash, id] = root_indices[i];
+					db_root_index.set(hash, id);
+				}
+				
+				
+				
+				PRIVATE._state = db_state;
+				PRIVATE._root_index = db_root_index;
 			}
 			catch(e) {
-				throw new Error(`Cannot read database main index! (${e})`);
+				const error = new LevelKVError(LevelKVError.DB_INDEX_INIT);
+				error.details.push(e);
+				throw error;
 			}
 			// endregion
 
 
 
-			_RAStorage.set(DB, { RAS_INDEX, RAS_DATA });
-			PROPS.valid = true;
+			
+			
+			PRIVATE._db_status = DB_STATUS.OK;
 			return DB;
 		}
 	}
-	
 	module.exports = { LevelKV, DBMutableCursor };
-
-
-
-	/*
-	const PROP_MAP = new WeakMap();
-	class LevelKV {
-		constructor(){
-			PROP_MAP[this] = {};
+	
+	
+	
+	
+	
+	
+	async function ___THROTTLE_TIMEOUT(inst, queue) {
+		if (queue.length <= 0) return;
+		
+		const push_back = [], promises=[], op_res_queue = [];
+		const locker = new Map();
+		while(queue.length > 0) {
+			const op_req = queue.shift();
+			const {info, ctrl} = op_req;
+			switch(info.op) {
+				case DB_OP.FETCH:
+				{
+					const lock = locker.get(info.key)|0;
+					if ( lock > DB_OP_LOCK.READ ) {
+						push_back.push(op_req);
+					}
+					else {
+						locker.set(info.key, DB_OP_LOCK.READ);
+						promises.push(___DB_OP_FETCH(inst, info));
+						op_res_queue.push(ctrl);
+					}
+				
+					break;
+				}
+				
+				case DB_OP.PUT:
+				{
+					const lock = locker.get(info.key)|0;
+					if ( lock > DB_OP_LOCK.NONE ) {
+						if ( lock === DB_OP_LOCK.READ ) {
+							locker.set(info.key, DB_OP_LOCK.ALL);
+						}
+						
+						push_back.push(op_req);
+					}
+					else {
+						locker.set(info.key, DB_OP_LOCK.WRITE);
+						promises.push(___DB_OP_PUT(inst, info));
+						op_res_queue.push(ctrl);
+					}
+					break;
+				}
+				
+				case DB_OP.DEL:
+				{
+					const lock = locker.get(info.key)|0;
+					if ( lock > DB_OP_LOCK.NONE ) {
+						if ( lock === DB_OP_LOCK.READ ) {
+							locker.set(info.key, DB_OP_LOCK.ALL);
+						}
+						
+						push_back.push(op_req);
+					}
+					else {
+						locker.set(info.key, DB_OP_LOCK.WRITE);
+						promises.push(___DB_OP_DEL(inst, info));
+						op_res_queue.push(ctrl);
+					}
+				
+					break;
+				}
+				
+				case DB_OP.CLOSE:
+				{
+					if ( queue.length > 0 ) {
+						push_back.push(op_req);
+					}
+					else {
+						promises.push(___DB_OP_CLOSE(inst, info));
+						op_res_queue.push(ctrl);
+					}
+					break;
+				}
+			}
 		}
-		async open(dir, options={type:'json'}) {
-			const PROPS = PROP_MAP.get(this);
-			PROPS.db = new ((options.type === 'json') ? DEFAULT_BSON_DB : DEFAULT_JSON_DB)();
-			return PROPS.db.open(dir, options);
-		}
-		async close() {
-			const PROPS = PROP_MAP.get(this);
-			return PROPS.db.close();
-		}
-		async get(query=null) {
-			const PROPS = PROP_MAP.get(this);
-			return PROPS.db.get(query);
-		}
-		async put(query=null, content={}) {
-			const PROPS = PROP_MAP.get(this);
-			return PROPS.db.put(query, content);
-		}
-		async del(query=null) {
-			const PROPS = PROP_MAP.get(this);
-			return PROPS.db.del(query);
+		
+		queue.splice(0, 0, ...push_back);
+		
+		
+		
+		let results = await PromiseWaitAll(promises);
+		for(let {resolved, seq, result} of results) {
+			const {resolve, reject} = op_res_queue[seq];
+			(resolved?resolve:reject)(result)
 		}
 	}
-	module.exports=LevelKV;
-	*/
-	
-	
-	
-	
-	/*
-		const levelkv = require('levelkv');
-		let db = await levelkv();
-		await db.open()
-		await db.close()
-		await db.put()
-		await db.del()
-		
-		let iterator = await db.get()
-		await iterator.next()
-		await iterator.seek()
-		await iterator.end()
+	async function ___DB_OP_FETCH(inst, op) {
+		const {_root_index, _hData} = _REL_MAP.get(inst);
+		const {key} = op;
 		
 		
-		db.batch()
-		db.approximateSize()
-		db.compactRange()
-		db.getProperty()
-		db.iterator()
-	 */
+	}
+	async function ___DB_OP_FETCH_INDEX(inst, op) {
+		const {_root_index, _hData} = _REL_MAP.get(inst);
+		const {key} = op;
+		
+		
+	}
+	async function ___DB_OP_PUT(inst, op) {
+		const {_hData} = _REL_MAP.get(inst);
+		const {key, data} = op;
+		
+		let index = await ___GET_INDEX(inst, key);
+		console.log(key, data.byteLength, index);
+		if ( index !== null ) {
+			await _hData.set(index, data);
+		}
+		else {
+			let storageId = await _hData.put(data);
+			await ___ADD_INDEX(inst, key, storageId);
+		}
+	}
+	async function ___DB_OP_DEL(inst, op) {
+		const PRIVATE = _REL_MAP.get(inst);
+		const {_hData} = PRIVATE;
+		const {key} = op;
+		
+		let index = await ___GET_INDEX(inst, key);
+		if ( index !== null ) {
+			await _hData.del(index);
+		}
+		
+		await ___DEL_INDEX(inst, key);
+		
+	}
+	async function ___DB_OP_CLOSE(inst) {
+		const PRIVATE = _REL_MAP.get(inst);
+		
+		await PromiseWaitAll([
+			PRIVATE._hData.close(),
+			PRIVATE._hIndex.close()
+		]);
+		
+		PRIVATE._hData = PRIVATE._hIndex = PRIVATE._storage_path =
+		PRIVATE._index_path = PRIVATE._storage_path = PRIVATE._root_index = null;
+		PRIVATE._db_status = DB_STATUS.CLOSED;
+	}
+	
+	
+	
+	
+	
+	
+	
+	function ___GET_INDEX(inst, key) {
+		const {_index_op_throttle} = _REL_MAP.get(inst);
+		return _index_op_throttle.push({op:INDEX_OP.GET, key});
+	}
+	function ___ADD_INDEX(inst, key, relId) {
+		const {_index_op_throttle} = _REL_MAP.get(inst);
+		return _index_op_throttle.push({op:INDEX_OP.ADD, key, id:relId});
+	}
+	function ___DEL_INDEX(inst, key) {
+		const {_index_op_throttle} = _REL_MAP.get(inst);
+		return _index_op_throttle.push({op:INDEX_OP.DEL, key});
+	}
+	
+	async function ___INDEX_THROTTLE_TIMEOUT(inst, queue) {
+		if (queue.length <= 0) return;
+		
+		
+		
+		const push_back = [], promises=[], op_res_queue = [];
+		let lock = INDEX_LOCK.NONE;
+		while(queue.length > 0) {
+			const op_req = queue.shift();
+			const {info, ctrl} = op_req;
+			switch(info.op) {
+				case INDEX_OP.GET:
+					if ( lock > INDEX_LOCK.READ ) {
+						push_back.push(op_req);
+					}
+					else {
+						lock = INDEX_LOCK.READ;
+						promises.push(___INDEX_OP_GET(inst, info));
+						op_res_queue.push(ctrl);
+					}
+					break;
+					
+				case INDEX_OP.ADD:
+					if ( lock !== INDEX_LOCK.NONE ) {
+						push_back.push(op_req);
+					}
+					else {
+						lock = INDEX_LOCK.WRITE;
+						promises.push(___INDEX_OP_ADD(inst, info));
+						op_res_queue.push(ctrl);
+					}
+					break;
+					
+				case INDEX_OP.DEL:
+					if ( lock !== INDEX_LOCK.NONE ) {
+						push_back.push(op_req);
+					}
+					else {
+						lock = INDEX_LOCK.WRITE;
+						promises.push(___INDEX_OP_DEL(inst, info));
+						op_res_queue.push(ctrl);
+					}
+					break;
+			}
+		}
+		
+		queue.splice(0, 0, ...push_back);
+		
+		
+		// NOTE: Wait for all index operations
+		let results = await PromiseWaitAll(promises);
+		
+		
+		// NOTE: If the indices are dirty, then clean it!
+		if ( _REL_MAP.get(inst)._dirty ) {
+			await ___INDEX_DIRTY_CLEAN(inst);
+		}
+		
+		// NOTE: Resolve everything...
+		for(let {resolved, seq, result} of results) {
+			const {resolve, reject} = op_res_queue[seq];
+			(resolved?resolve:reject)(result)
+		}
+	}
+	async function ___INDEX_OP_GET(inst, opInfo) {
+		const {key} = opInfo;
+		const {_root_index, _hIndex} = _REL_MAP.get(inst);
+		const hash = djb2a(key);
+		const indexId = _root_index.get(hash);
+		if ( !indexId ) return null;
+		
+		const indexList = await _hIndex.get(indexId);
+		if ( Object(indexList) !== indexList ) {
+			const error = new LevelKVError(LevelKVError.DB_INDEX_STRUCTURE);
+			error.details.push({key, hash, indexId});
+			throw error;
+		}
+		
+		if ( indexList.hasOwnProperty(key) ) {
+			return indexList[key];
+		}
+		
+		return null;
+	}
+	async function ___INDEX_OP_ADD(inst, opInfo) {
+		const {key, id:storageId} = opInfo;
+		const PRIVATE = _REL_MAP.get(inst);
+		const {_root_index, _hIndex, _dirty} = PRIVATE;
+		const hash = djb2a(key);
+		
+		let indexId = _root_index.get(hash);
+		if ( !indexId ) {
+			indexId = await _hIndex.put({});
+			_root_index.set(hash, indexId);
+			PRIVATE._dirty = _dirty || true;
+		}
+		
+		const indexList = await _hIndex.get(indexId);
+		if ( Object(indexList) !== indexList ) {
+			const error = new LevelKVError(LevelKVError.DB_INDEX_STRUCTURE);
+			error.details.push({key, hash, indexId});
+			throw error;
+		}
+		
+		indexList[key] = storageId;
+		await _hIndex.set(indexId, indexList);
+	}
+	async function ___INDEX_OP_DEL(inst, opInfo) {
+		const {key} = opInfo;
+		const PRIVATE = _REL_MAP.get(inst);
+		const {_root_index, _hIndex, _dirty} = PRIVATE;
+		const hash = djb2a(key);
+		
+		let indexId = _root_index.get(hash);
+		if ( !indexId ) return;
+		
+		
+		
+		const indexList = await _hIndex.get(indexId);
+		if ( Object(indexList) !== indexList ) {
+			const error = new LevelKVError(LevelKVError.DB_INDEX_STRUCTURE);
+			error.details.push({key, hash, indexId});
+			throw error;
+		}
+		
+		if ( indexList.hasOwnProperty(key) ) {
+			delete indexList[key];
+		}
+		
+		let keep = false;
+		for(let k in indexList) {
+			if ( indexList.hasOwnProperty(k) ) {
+				keep = keep || true;
+				break;
+			}
+		}
+		
+		
+		
+		
+		if ( keep ) {
+			await _hIndex.put(indexId, indexList);
+		}
+		else {
+			await _hIndex.del(indexId);
+			_root_index.delete(hash);
+			PRIVATE._dirty = _dirty || true;
+		}
+	}
+	async function ___INDEX_DIRTY_CLEAN(inst) {
+		const PRIVATE = _REL_MAP.get(inst);
+		const {_root_index, _hIndex} = PRIVATE;
+		
+		let list = [];
+		_root_index.forEach((id, hash)=>{
+			list.push([hash, id]);
+		});
+		await _hIndex.set( INDEX_BLOCK_POS.ROOT_INDEX, list );
+		PRIVATE._dirty = false;
+	}
 })();
