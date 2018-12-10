@@ -458,7 +458,7 @@
 				
 				case DB_OP.CLOSE:
 				{
-					if ( queue.length > 0 ) {
+					if ( queue.length > 0 || op_res_queue.length > 0 ) {
 						push_back.push(op_req);
 					}
 					else {
