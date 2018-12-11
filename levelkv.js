@@ -174,7 +174,12 @@
 			}
 
 			if ( promises.length <= 0 ) {
-				return Promise.resolve(new DBCursor(this, []));
+				if(!options.mutable_cursor) {
+					return Promise.resolve(new DBCursor(this, []));
+				}
+				else {
+					return Promise.resolve(new DBMutableCursor(this, []));
+				}
 			}
 
 
