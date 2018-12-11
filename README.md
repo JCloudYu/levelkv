@@ -41,15 +41,14 @@ for await( let value of result )
 
 
 // Use Mutable Cursor
-const dbCursor          = await db.get();
-const dbMutableCursor 	= new DBMutableCursor(dbCursor);
-const segments          = dbMutableCursor.segments;
+const dbCursor  = await db.get([], {mutable_cursor: true});
+const segments  = dbCursor.segments;
 for( let segment of segments )
 {
-    segment.in_memory = true;
-    segment.value = 'newValue';
+    segment._in = false;
+    segment._v = 'newValue';
 }
-console.log( await dbMutableCursor.toArray() );
+console.log( await dbCursor.toArray() );
 
 
 
