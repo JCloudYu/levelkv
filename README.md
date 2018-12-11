@@ -23,7 +23,7 @@ await db.put( `${key}`, value );
 await db.put( `${key}2`, value );
 
 // Get data
-let result = db.get( key );
+let result = await db.get( key );
 console.log( result.length );
 console.log( await result.toArray() );
 
@@ -32,7 +32,7 @@ console.log( await result.toArray() );
 await db.del( key );
 
 // Get all data
-result = db.get();
+result = await db.get();
 for await( let value of result )
 {
     console.log( value );
@@ -41,7 +41,7 @@ for await( let value of result )
 
 
 // Use Mutable Cursor
-const dbCursor          = db.get();
+const dbCursor          = await db.get();
 const dbMutableCursor 	= new DBMutableCursor(dbCursor);
 const segments          = dbMutableCursor.segments;
 for( let segment of segments )
