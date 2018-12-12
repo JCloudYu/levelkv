@@ -14,6 +14,7 @@
 	
 	
 	
+	const MAX_THROTTLE_BATCH_SIZE = 100;
 	const _REL_MAP = new WeakMap();
 	const DB_STATUS = {
 		OK: 0,
@@ -132,8 +133,7 @@
 				{
 					PRIVATE._db_status = DB_STATUS.CLOSING;
 				
-					const p = PRIVATE._op_throttle.push({op:DB_OP.CLOSE});
-					return p.promise;
+					return PRIVATE._op_throttle.push({op:DB_OP.CLOSE});
 				}
 				
 				case DB_STATUS.CLOSING:
@@ -411,56 +411,125 @@
 	async function ___THROTTLE_TIMEOUT(inst, queue) {
 		if (queue.length <= 0) return;
 		
-		
-		
-		const push_back = [];
-		while(queue.length > 0) {
+		const push_back = [], promises=[], op_res_queue = [];
+		const locker = new Map();
+		while(queue.length > 0 && op_res_queue.length <= MAX_THROTTLE_BATCH_SIZE) {
 			const op_req = queue.shift();
 			const {info, ctrl} = op_req;
-			let op_promise = null;
+			
+			if ( info.op === DB_OP.FETCH_INDEX ) {
+				if ( op_res_queue.length > 0 ) {
+					push_back.push(op_req);
+					continue;
+				}
+				
+				promises.push(___DB_OP_FETCH_INDEX(inst, info));
+				op_res_queue.push(ctrl);
+				break;
+			}
 			
 			switch(info.op) {
 				case DB_OP.FETCH_ALL_INDEX:
-					op_promise = ___DB_OP_FETCH_ALL_INDEX(inst, info);
-					break;
-
-				case DB_OP.FETCH_INDEX:
-					op_promise = ___DB_OP_FETCH_INDEX(inst, info);
-					break;
-
-				case DB_OP.FETCH:
-					op_promise = ___DB_OP_FETCH(inst, info);
-					break;
-				
-				case DB_OP.PUT:
-					op_promise = ___DB_OP_PUT(inst, info);
-					break;
-				
-				case DB_OP.DEL:
-					op_promise = ___DB_OP_DEL(inst, info);
-					break;
-				
-				case DB_OP.CLOSE:
-					if ( queue.length > 0 ) {
+				{
+					const lock = locker.get(info.key)|0;
+					if ( lock > DB_OP_LOCK.READ ) {
 						push_back.push(op_req);
 					}
 					else {
-						op_promise = ___DB_OP_CLOSE(inst, info);
+						locker.set(info.key, DB_OP_LOCK.READ);
+						promises.push(___DB_OP_FETCH_ALL_INDEX(inst, info));
+						op_res_queue.push(ctrl);
 					}
 					break;
-			}
-			if ( op_promise ) {
-				try {
-					let result = await op_promise;
-					ctrl.resolve(result);
 				}
-				catch(e) {
-					ctrl.reject(e);
+
+				case DB_OP.FETCH_INDEX:
+				{
+					const lock = locker.get(info.key)|0;
+					if ( lock > DB_OP_LOCK.READ ) {
+						push_back.push(op_req);
+					}
+					else {
+						locker.set(info.key, DB_OP_LOCK.READ);
+						promises.push(___DB_OP_FETCH_INDEX(inst, info));
+						op_res_queue.push(ctrl);
+					}
+					break;
+				}
+
+				case DB_OP.FETCH:
+				{
+					const lock = locker.get(info.key)|0;
+					if ( lock > DB_OP_LOCK.READ ) {
+						push_back.push(op_req);
+					}
+					else {
+						locker.set(info.key, DB_OP_LOCK.READ);
+						promises.push(___DB_OP_FETCH(inst, info));
+						op_res_queue.push(ctrl);
+					}
+
+					break;
+				}
+				
+				case DB_OP.PUT:
+				{
+					const lock = locker.get(info.key)|0;
+					if ( lock > DB_OP_LOCK.NONE ) {
+						if ( lock === DB_OP_LOCK.READ ) {
+							locker.set(info.key, DB_OP_LOCK.ALL);
+						}
+						
+						push_back.push(op_req);
+					}
+					else {
+						locker.set(info.key, DB_OP_LOCK.WRITE);
+						promises.push(___DB_OP_PUT(inst, info));
+						op_res_queue.push(ctrl);
+					}
+					break;
+				}
+				
+				case DB_OP.DEL:
+				{
+					const lock = locker.get(info.key)|0;
+					if ( lock > DB_OP_LOCK.NONE ) {
+						if ( lock === DB_OP_LOCK.READ ) {
+							locker.set(info.key, DB_OP_LOCK.ALL);
+						}
+						
+						push_back.push(op_req);
+					}
+					else {
+						locker.set(info.key, DB_OP_LOCK.WRITE);
+						promises.push(___DB_OP_DEL(inst, info));
+						op_res_queue.push(ctrl);
+					}
+				
+					break;
+				}
+				
+				case DB_OP.CLOSE:
+				{
+					if ( queue.length > 0 || op_res_queue.length > 0 ) {
+						push_back.push(op_req);
+					}
+					else {
+						promises.push(___DB_OP_CLOSE(inst, info));
+						op_res_queue.push(ctrl);
+					}
+					break;
 				}
 			}
 		}
 		
 		queue.splice(0, 0, ...push_back);
+		
+		let results = await PromiseWaitAll(promises).catch(r=>r);
+		for(let {resolved, seq, result} of results) {
+			const {resolve, reject} = op_res_queue[seq];
+			(resolved?resolve:reject)(result)
+		}
 	}
 	async function ___DB_OP_FETCH(inst, op) {
 		const {_hData} = _REL_MAP.get(inst);
@@ -542,44 +611,74 @@
 		
 		
 		
+		const push_back = [], promises=[], op_res_queue = [];
+		let lock = INDEX_LOCK.NONE;
 		while(queue.length > 0) {
 			const op_req = queue.shift();
 			const {info, ctrl} = op_req;
-			let op_promise = null;
-			
 			switch(info.op) {
 				case INDEX_OP.GET_ALL:
-					op_promise = ___INDEX_OP_GET_ALL(inst, info);
+					if ( lock > INDEX_LOCK.READ ) {
+						push_back.push(op_req);
+					}
+					else {
+						lock = INDEX_LOCK.READ;
+						promises.push(___INDEX_OP_GET_ALL(inst, info));
+						op_res_queue.push(ctrl);
+					}
 					break;
-
+				
 				case INDEX_OP.GET:
-					op_promise = ___INDEX_OP_GET(inst, info);
+					if ( lock > INDEX_LOCK.READ ) {
+						push_back.push(op_req);
+					}
+					else {
+						lock = INDEX_LOCK.READ;
+						promises.push(___INDEX_OP_GET(inst, info));
+						op_res_queue.push(ctrl);
+					}
 					break;
 					
 				case INDEX_OP.ADD:
-					op_promise = ___INDEX_OP_ADD(inst, info);
+					if ( lock !== INDEX_LOCK.NONE ) {
+						push_back.push(op_req);
+					}
+					else {
+						lock = INDEX_LOCK.WRITE;
+						promises.push(___INDEX_OP_ADD(inst, info));
+						op_res_queue.push(ctrl);
+					}
 					break;
 					
 				case INDEX_OP.DEL:
-					op_promise = ___INDEX_OP_DEL(inst, info);
+					if ( lock !== INDEX_LOCK.NONE ) {
+						push_back.push(op_req);
+					}
+					else {
+						lock = INDEX_LOCK.WRITE;
+						promises.push(___INDEX_OP_DEL(inst, info));
+						op_res_queue.push(ctrl);
+					}
 					break;
 			}
-			
-			
-			if ( op_promise ) {
-				try {
-					let result = await op_promise;
-					ctrl.resolve(result);
-				}
-				catch(e) {
-					ctrl.reject(e);
-				}
-			}
 		}
+		
+		queue.splice(0, 0, ...push_back);
+		
+		
+		// NOTE: Wait for all index operations
+		let results = await PromiseWaitAll(promises);
+		
 		
 		// NOTE: If the indices are dirty, then clean it!
 		if ( _REL_MAP.get(inst)._dirty ) {
 			await ___INDEX_DIRTY_CLEAN(inst);
+		}
+		
+		// NOTE: Resolve everything...
+		for(let {resolved, seq, result} of results) {
+			const {resolve, reject} = op_res_queue[seq];
+			(resolved?resolve:reject)(result)
 		}
 	}
 	async function ___INDEX_OP_GET_ALL(inst, opInfo) {
