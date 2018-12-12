@@ -26,6 +26,7 @@
 	};
 	
 	const DB_OP = {
+		FETCH_ALL_INDEX: 'FETCH_ALL_INDEX',
 		FETCH_INDEX: 'FETCH_INDEX',
 		FETCH:	'FETCH',
 		PUT:	'PUT',
@@ -40,6 +41,7 @@
 	};
 	
 	const INDEX_OP = {
+		GET_ALL: 'GET_ALL',
 		GET: 'GET',
 		ADD: 'ADD',
 		DEL: 'DEL'
@@ -159,10 +161,11 @@
 			if ( !Array.isArray(keys) ) { keys = [keys]; }
 			
 			
-			
+
 			const promises = [];
 			const registered = new Map();
 			const reserved_keys = [];
+
 			for(let key of keys) {
 				let prev = registered.get(key);
 				if ( prev ) { continue; }
@@ -174,17 +177,37 @@
 			}
 
 			if ( promises.length <= 0 ) {
-				if(!options.mutable_cursor) {
-					return Promise.resolve(new DBCursor(this, []));
-				}
-				else {
-					return Promise.resolve(new DBMutableCursor(this, []));
-				}
+				const p = _op_throttle.push({op: DB_OP.FETCH_ALL_INDEX});
+				promises.push(p);
+				return Promise.all(promises).then((matches)=>{
+					matches = matches[0];
+					const newMatches = [];
+										
+					for( let i=0; i < matches.length; i++ ) {
+						let {key, _id} = matches[i];
+						if( !options.mutable_cursor ) {
+							newMatches.push(_id);
+						}
+						else {
+							newMatches.push( { _in: true, key, _id } );
+						}
+					}
+
+
+					if (!options.mutable_cursor) {
+						return new DBCursor(this, newMatches);
+					}
+					else {
+						return new DBMutableCursor(this, newMatches);
+					}
+				});
 			}
+
 
 
 			return Promise.all(promises).then((matches)=>{
 				let newMatches = [];
+
 				for( let i=0; i < matches.length; i++ ) {
 					let dataId = matches[i];
 					if ( dataId === null ) {continue;}
@@ -397,6 +420,10 @@
 			let op_promise = null;
 			
 			switch(info.op) {
+				case DB_OP.FETCH_ALL_INDEX:
+					op_promise = ___DB_OP_FETCH_ALL_INDEX(inst, info);
+					break;
+
 				case DB_OP.FETCH_INDEX:
 					op_promise = ___DB_OP_FETCH_INDEX(inst, info);
 					break;
@@ -439,6 +466,9 @@
 		const {_hData} = _REL_MAP.get(inst);
 		const {id} = op;
 		return await _hData.get(id);
+	}
+	async function ___DB_OP_FETCH_ALL_INDEX(inst, op) {
+		return await ___GET_ALL_INDEX(inst);
 	}
 	async function ___DB_OP_FETCH_INDEX(inst, op) {
 		const {key} = op;
@@ -489,7 +519,11 @@
 	
 	
 	
-	
+
+	function ___GET_ALL_INDEX(inst) {
+		const {_index_op_throttle} = _REL_MAP.get(inst);
+		return _index_op_throttle.push({op:INDEX_OP.GET_ALL});
+	}
 	function ___GET_INDEX(inst, key) {
 		const {_index_op_throttle} = _REL_MAP.get(inst);
 		return _index_op_throttle.push({op:INDEX_OP.GET, key});
@@ -514,6 +548,10 @@
 			let op_promise = null;
 			
 			switch(info.op) {
+				case INDEX_OP.GET_ALL:
+					op_promise = ___INDEX_OP_GET_ALL(inst, info);
+					break;
+
 				case INDEX_OP.GET:
 					op_promise = ___INDEX_OP_GET(inst, info);
 					break;
@@ -543,6 +581,27 @@
 		if ( _REL_MAP.get(inst)._dirty ) {
 			await ___INDEX_DIRTY_CLEAN(inst);
 		}
+	}
+	async function ___INDEX_OP_GET_ALL(inst, opInfo) {
+		const {_root_index, _hIndex} = _REL_MAP.get(inst);
+		const dataIds = [];
+
+		for( const [hash, indexId] of _root_index ) {
+			const indexList = await _hIndex.get(indexId);
+			if ( Object(indexList) !== indexList ) {
+				const error = new LevelKVError(LevelKVError.DB_INDEX_STRUCTURE);
+				error.details.push({hash, indexId});
+				throw error;
+			}
+
+			for( const key in indexList ) {
+				if ( indexList.hasOwnProperty(key) ) {
+					dataIds.push( { key, _id: indexList[key] } );
+				}
+			}
+		}
+
+		return dataIds;
 	}
 	async function ___INDEX_OP_GET(inst, opInfo) {
 		const {key} = opInfo;
