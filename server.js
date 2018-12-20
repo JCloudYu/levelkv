@@ -1,113 +1,102 @@
-(()=>{
+(async()=>{
+	const crypto 			= require( 'crypto' );
 	const {LevelKV} 		= require( '../levelkv' );
 	const {NetEvtServer} 	= require( 'netevt' );
 	const {Serialize, Deserialize} = require( 'beson' );
 
-	const PORT = 1234;
-	const HOST = 'localhost';
-	const BASE_DIR 		= `${__dirname}/ignored.test/levelkv-dbs`;
-	const _DATABASES 	= {};
-	const _CLIENTS 		= {};
+	const PORT 		= 1234;
+	const HOST 		= 'localhost';
+	const DB_DIR 	= `${__dirname}/ignored.test/levelkv-db`;
+
 	const LEVELKV_EVENT = {
 		CONNECTED: 			'connected',
 		DISCONNECTED: 		'disconnected',
-		OPEN_DATABASE_REQ: 	'OPEN_DATABASE_REQ',
-		OPEN_DATABASE_ACK: 	'OPEN_DATABASE_ACK',
-		CLOSE_DATABASE_REQ: 'CLOSE_DATABASE_REQ',
-		CLOSE_DATABASE_ACK: 'CLOSE_DATABASE_ACK',
-		GET_DATA_REQ: 		'GET_DATA_REQ',
-		GET_DATA_ACK: 		'GET_DATA_ACK',
-		PUT_DATA_REQ: 		'PUT_DATA_REQ',
-		PUT_DATA_ACK: 		'PUT_DATA_ACK',
-		DEL_DATA_REQ: 		'DEL_DATA_REQ',
-		DEL_DATA_ACK: 		'DEL_DATA_ACK'
-	};
-	const STATUS = {
-		SUCCESS: 	0,
-		FAIL: 		-1
+		GET_DATA_REQ: 		'3',
+		GET_DATA_ACK: 		'4',
+		GET_LENGTH_REQ: 	'5',
+		GET_LENGTH_ACK: 	'6',
+		GET_NEXT_REQ: 		'7',
+		GET_NEXT_ACK: 		'8',
+		GET_TO_ARRAY_REQ: 	'9',
+		GET_TO_ARRAY_ACK: 	'10',
+		PUT_DATA_REQ: 		'11',
+		DEL_DATA_REQ: 		'12'
 	};
 
-	const ServerInst = new NetEvtServer();
-	ServerInst._serializer 		= (input)=>{ return Serialize(input); };
-	ServerInst._deserializer 	= (input)=>{ return Deserialize(input); };
+
+
+	const _cursors 		= {};
+	const _database 	= await LevelKV.initFromPath( `${DB_DIR}` );
+	const _serverInst 	= new NetEvtServer();
+	_serverInst._serializer 	= (input)=>{ return Serialize(input); };
+	_serverInst._deserializer 	= (input)=>{ return Deserialize(input); };
 
 
 
-	ServerInst
+	_serverInst
 	.on( LEVELKV_EVENT.CONNECTED, (e)=>{
 		const {sender: client} = e;
-		client.id = Date.now();
-		_CLIENTS[client.id] = {};
-		console.log( `Client ${client.id} has connected!` );
+		client.id = `${Date.now()}_${crypto.randomBytes(5).toString('hex')}`;
+		console.log( `Client (${client.id}) has connected!` );
 	})
 	.on( LEVELKV_EVENT.DISCONNECTED, (e)=>{
 		const {sender: client} = e;
-		delete _CLIENTS[client.id];
-		console.log( `Client ${client.id} has disconnected!` );
-	})
-	.on( LEVELKV_EVENT.OPEN_DATABASE_REQ, async(e, data)=>{
-		const {sender: client} = e;
-		const {db_name} = data;
-
-		console.log( `Open database (${db_name}) for client ${client.id}` );
-		if( !_DATABASES[db_name] ) {
-			_DATABASES[db_name] = await LevelKV.initFromPath( `${BASE_DIR}/${db_name}` );
-		}
-		_CLIENTS[client.id][db_name] = _DATABASES[db_name];
-		client.triggerEvent( LEVELKV_EVENT.OPEN_DATABASE_ACK, { status: STATUS.SUCCESS, message: '' } );
-	})
-	.on( LEVELKV_EVENT.CLOSE_DATABASE_REQ, (e, data)=>{
-		const {sender: client} = e;
-		const {db_name} = data;
-
-		console.log( `Close database (${db_name}) for client ${client.id}` );
-		delete _CLIENTS[client.id][db_name];
-		client.triggerEvent( LEVELKV_EVENT.CLOSE_DATABASE_ACK, { status: STATUS.SUCCESS, message: '' } );
+		console.log( `Client (${client.id}) has disconnected!` );
 	})
 	.on( LEVELKV_EVENT.GET_DATA_REQ, async(e, data)=>{
 		const {sender: client} = e;
-		const {db_name, key} = data;
+		const {key} = data;
 
-		console.log( `Get key ${key} from database (${db_name}) for client ${client.id}` );
-		if( !_CLIENTS[client.id][db_name] ) {
-			const message = `Cannot get data for client (${client.id})! Database (${db_name}) is not open yet!`;
-			client.triggerEvent( LEVELKV_EVENT.GET_DATA_ACK, { status: STATUS.FAIL, message } );
-			console.log( message );
+		console.log( `Get key (${key}) from database for client (${client.id})` );
+		const cursor 	= await _database.get( key );
+		const token 	= crypto.randomBytes(5).toString('hex');
+		_cursors[token] = cursor;
+
+		client.triggerEvent( LEVELKV_EVENT.GET_DATA_ACK, {token} );
+	})
+	.on( LEVELKV_EVENT.GET_LENGTH_REQ, (e, data)=>{
+		const {sender: client} = e;
+		const {token} 	= data;
+		const cursor 	= _cursors[token];
+		if( !cursor ) return;
+
+		client.triggerEvent( LEVELKV_EVENT.GET_LENGTH_ACK, {token, length: cursor.length} );
+	} )
+	.on( LEVELKV_EVENT.GET_TO_ARRAY_REQ, async(e, data)=>{
+		const {sender: client} = e;
+		const {token} = data;
+		const cursor = _cursors[token];
+		if( !cursor ) return;
+
+		client.triggerEvent( LEVELKV_EVENT.GET_TO_ARRAY_ACK, {token, value: await cursor.toArray()} );
+		delete _cursors[token];
+	} )
+	.on( LEVELKV_EVENT.GET_NEXT_REQ, async(e, data)=>{
+		const {sender: client} = e;
+		const {token} = data;
+		const cursor = _cursors[token];
+
+		if( !cursor ) return;
+
+		if( cursor.length > 0 ) {
+			client.triggerEvent( LEVELKV_EVENT.GET_NEXT_ACK, {token, value: await cursor.next().value} );
 			return;
 		}
-
-		const result = await _CLIENTS[client.id][db_name].get( key );
-		client.triggerEvent( LEVELKV_EVENT.GET_DATA_ACK, { status: STATUS.SUCCESS, message: '', data: await result.toArray() } );
-	})
+		delete _cursors[token];
+	} )
 	.on( LEVELKV_EVENT.PUT_DATA_REQ, (e, data)=>{
 		const {sender: client} = e;
-		const {db_name, key, value} = data;
+		const {key, value} = data;
 
-		console.log( `Add key ${key} from database (${db_name}) for client ${client.id}` );
-		if( !_CLIENTS[client.id][db_name] ) {
-			const message = `Cannot add data for client (${client.id})! Database (${db_name}) is not open yet!`;
-			client.triggerEvent( LEVELKV_EVENT.PUT_DATA_ACK, { status: STATUS.FAIL, message } );
-			console.log( message );
-			return;
-		}
-
-		_CLIENTS[client.id][db_name].put( key, value );
-		client.triggerEvent( LEVELKV_EVENT.PUT_DATA_ACK, { status: STATUS.SUCCESS, message: '' } );
+		console.log( `Add key (${key}) from database for client (${client.id})` );
+		_database.put( key, value );
 	})
 	.on( LEVELKV_EVENT.DEL_DATA_REQ, (e, data)=>{
 		const {sender: client} = e;
-		const {db_name, key} = data;
+		const {key} = data;
 
-		console.log( `Delete key ${key} from database (${db_name}) for client ${client.id}` );
-		if( !_CLIENTS[client.id][db_name] ) {
-			const message = `Cannot delete data for client (${client.id})! Database (${db_name}) is not open yet!`;
-			client.triggerEvent( LEVELKV_EVENT.DEL_DATA_ACK, { status: STATUS.FAIL, message } );
-			console.log( message );
-			return;
-		}
-
-		_CLIENTS[client.id][db_name].del( key);
-		client.triggerEvent( LEVELKV_EVENT.DEL_DATA_ACK, { status: STATUS.SUCCESS, message: '' } );
+		console.log( `Delete key (${key}) from database for client (${client.id})` );
+		_database.del( key);
 	})
 	.listen( PORT, HOST );
 })();
