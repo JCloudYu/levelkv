@@ -22,7 +22,6 @@
 	"homepage": "https://github.com/JCloudYu/levelkv#readme",
 	"dependencies": {
 		"beson": "^0.9.17",
-		"netevt": "^0.2.4",
 		"rastorage": "^0.9.2"
 	}
 }
