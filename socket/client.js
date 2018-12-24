@@ -1,108 +1,126 @@
 (()=>{
 	"use strict";
 
-	const beson = require('beson');
-	const {NetEvtClient} = require( 'netevt' );
-	const clientInst = new NetEvtClient();
-	let _server;
+	const {Serialize, Deserialize} = require( 'beson' );
+	const {Socket} = require( 'net' );
+	const {NetSocket, NET_SOCKET_EVENT, LEVELKV_EVENT} = require( './net-socket' );
 
 
 
-	const LEVELKV_EVENT = {
-		CONNECTED: 			'connected',
-		DISCONNECTED: 		'disconnected',
-		GET_DATA_REQ: 		'3',
-		GET_DATA_ACK: 		'4',
-		GET_LENGTH_REQ: 	'5',
-		GET_LENGTH_ACK: 	'6',
-		GET_NEXT_REQ: 		'7',
-		GET_NEXT_ACK: 		'8',
-		GET_TO_ARRAY_REQ: 	'9',
-		GET_TO_ARRAY_ACK: 	'10',
-		PUT_DATA_REQ: 		'11',
-		DEL_DATA_REQ: 		'12'
+
+	const DATA_STATUS = {
+
+		RETRIEVED: 3
 	};
 
+	const PORT 		= 12345;
+	const HOST 		= 'localhost';
+	const _REL_MAP 	= new WeakMap();
 
+	class Client {
+		constructor() {
+			const socket = new Socket();
 
-	clientInst._serializer 		= (input)=>{return beson.Serialize(input);};
-	clientInst._deserializer 	= (input)=>{return beson.Deserialize(input);};
+			socket
+			.on( NET_SOCKET_EVENT.CONNECT, 	___HANDLE_CONNECT.bind(this) )
+			.on( NET_SOCKET_EVENT.CLOSE, 	___HANDLE_CLOSE.bind(this) )
+			.on( NET_SOCKET_EVENT.ERROR, 	___HANDLE_ERROR.bind(this) )
+			.on( NET_SOCKET_EVENT.DATA, 	___HANDLE_DATA.bind(this) );
 
-	const tokens = {};
+			this._socket 		= socket;
+			this._serializer 	= (input)=>{ return Serialize(input); };
+			this._deserializer 	= (input)=>{ return Deserialize(input); };
 
-
-	clientInst
-	.on( LEVELKV_EVENT.CONNECTED, (e)=>{
-		const {sender: server} = e;
-		_server = server;
-		console.log( "Connected to server!" );
-
-		console.log( `Database is ready, start to do operations...` );
-		server.triggerEvent( LEVELKV_EVENT.GET_DATA_REQ, {
-			key: 'key-test'
-		} );
-
-		server.triggerEvent( LEVELKV_EVENT.PUT_DATA_REQ, {
-			key: 'key-test',
-			value: { val: 'new value' }
-		} );
-
-		server.triggerEvent( LEVELKV_EVENT.GET_DATA_REQ, {
-			key: 'key-test'
-		} );
-
-		server.triggerEvent( LEVELKV_EVENT.DEL_DATA_REQ, {
-			key: 'key-test'
-		} );
-
-		server.triggerEvent( LEVELKV_EVENT.GET_DATA_REQ, {
-			key: 'key-test'
-		} );
-
-		server.triggerEvent( LEVELKV_EVENT.PUT_DATA_REQ, {
-			key: 'key-test',
-			value: 'new value2'
-		} );
-
-		server.triggerEvent( LEVELKV_EVENT.GET_DATA_REQ, {
-			key: 'key-test'
-		} );
-	})
-	.on( LEVELKV_EVENT.DISCONNECTED, (e)=>{
-		console.log( `Disconnected from server!` );
-	})
-	.on( LEVELKV_EVENT.GET_DATA_ACK, (e, data)=>{
-		const {sender: server} = e;
-
-		console.log( `Receiving data from server!` );
-		const {token} = data;
-		console.log(data);
-		tokens[token] = {token, length: 0, value: []};
-
-		//server.triggerEvent( LEVELKV_EVENT.GET_TO_ARRAY_REQ, {token} );
-		server.triggerEvent( LEVELKV_EVENT.GET_LENGTH_REQ, {token} );
-	})
-	.on( LEVELKV_EVENT.GET_LENGTH_ACK, (e, data)=> {
-		const {sender: server} = e;
-		const {token, length} = data;
-		console.log( `GET_LENGTH_ACK: Receiving ${token} length (${length}) from server!` );
-		tokens[token].length = length;
-
-		for( let i=0; i<length; i++ ) {
-			server.triggerEvent( LEVELKV_EVENT.GET_NEXT_REQ, {token} );
+			return this;
 		}
-	} )
-	.on( LEVELKV_EVENT.GET_TO_ARRAY_ACK, (e, data)=> {
-		const {token, value} = data;
-		console.log( `GET_TO_ARRAY_ACK: Receiving ${token} from server!` );
-		tokens[token].value = value;
-		console.log( `\tGET_TO_ARRAY_ACK: `, tokens[token] );
-	} )
-	.on( LEVELKV_EVENT.GET_NEXT_ACK, (e, data)=> {
-		const {token, value} = data;
-		console.log( `GET_NEXT_ACK: Receiving ${token} from server!` );
-		tokens[token].value.push( value );
-		console.log( `\tGET_NEXT_ACK: `, tokens[token] );
-	} )
-	.connect( 1234, 'localhost' );
+		get(key) {
+			this.send( {op: LEVELKV_EVENT.GET_DATA, key } );
+			// return cursor
+		}
+		put(key, value) {
+			this.send( {op: LEVELKV_EVENT.PUT_DATA, key, value} );
+		}
+		del(key) {
+			this.send( {op: LEVELKV_EVENT.DEL_DATA, key} );
+		}
+		/*
+		next() {
+			const {cursor} = _REL_MAP.get(this);
+			if( !cursor ) return undefined;
+
+			this.send( {op: LEVELKV_EVENT.GET_NEXT, segments: cursor.next()} );
+		}
+		*/
+		send(data) {
+			console.log( 'data:', data );
+			return this._socket.write( Buffer.from( this._serializer( data ) ));
+		}
+		connect(...args) {
+			return this._socket.connect(...args);
+		}
+		end() {
+			return this._socket.end();
+		}
+	}
+
+
+	module.exports = {Client};
+
+	try {
+		const _client = new Client();
+		_client.connect(PORT, HOST);
+	}
+	catch(e) {
+		throw e;
+	}
+
+
+	function ___HANDLE_CONNECT() {
+		const _this = this;
+		console.log( `Client (${_this.id}) has connected!` );
+		this.send({op: LEVELKV_EVENT.PUT_DATA, key: 'test', value: 'test-data'});
+		this.send({op: LEVELKV_EVENT.GET_DATA, key: 'test'});
+	}
+	function ___HANDLE_CLOSE() {
+		const _this = this;
+		console.log( `Client (${_this.id}) is disconnected!` );
+	}
+	function ___HANDLE_ERROR(error) {
+		console.log( `Error occurs! ${error}` );
+	}
+	async function ___HANDLE_DATA(data) {
+		console.log( `Receive data:`, this._deserializer( data ) );
+		const {op, key, value, segments} = this._deserializer(data);
+		switch (op) {
+			case LEVELKV_EVENT.GET_DATA:
+			{
+				// TODO: return cursor segments
+				_REL_MAP.set(this, {
+					cursor: new Cursor(segments),
+					value: []
+				} );
+				break;
+			}
+			case LEVELKV_EVENT.GET_NEXT:
+			{
+				// TODO: get next value
+				_REL_MAP.get(this).value.push(value);
+				break;
+			}
+			default:
+			{
+				console.log( `Invalid operation type! (${op})` );
+				break;
+			}
+		}
+	}
+
+	class Cursor {
+		constructor(segments) {
+
+		}
+		next() {
+
+		}
+	}
 })();
