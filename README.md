@@ -21,18 +21,31 @@ let value = { a:1, b:2, c:3 };
 // Add data
 await db.put( `${key}`, value );
 await db.put( `${key}2`, value );
+console.log( `Add 2 data to the database ...` );
 
 // Get data
-let result = await db.get( key );
-console.log( result.length );
-console.log( await result.toArray() );
+let result = await db.get();
+console.log( `Get all data:`, await result.toArray() );
+
+// Limit data amount
+const limit = 1;
+result = await db.get( [], {limit} );
+console.log( `Get all data but limit the amount to ${limit}:`, await result.toArray() );
+
+// Get specific data
+result = await db.get( key );
+console.log( `Get ${result.length} data from key '${key}':`, await result.toArray() );
+
+
 
 
 // Delete data
 await db.del( key );
+console.log( `Delete key '${key}' from the database ...` );
 
-// Get all data
+// Get data
 result = await db.get();
+console.log( `Get all data:` );
 for await( let value of result )
 {
     console.log( value );
@@ -48,7 +61,7 @@ for( let segment of segments )
     segment._in = false;
     segment._v = 'newValue';
 }
-console.log( await dbCursor.toArray() );
+console.log( `Get all data after using mutable cursor:`, await dbCursor.toArray() );
 
 
 
