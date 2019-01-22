@@ -153,14 +153,18 @@
 		 * @param {Boolean} [options.mutable_cursor=false]
 		 * @returns {Promise<DBCursor>} - Database cursor of the retrieved data.
 		 */
-		get(keys=[], options={mutable_cursor:false}) {
+		get(keys=[], options={mutable_cursor:false, limit:-1}) {
 			const {_op_throttle, _db_status} = _REL_MAP.get(this);
 			if ( _db_status !== DB_STATUS.OK ) {
 				throw new LevelKVError(LevelKVError.DB_CLOSING_ERROR);
 			}
 			if ( !Array.isArray(keys) ) { keys = [keys]; }
-			
-			
+
+			options = options || {};
+			options.mutable_cursor = (options.mutable_cursor === undefined) ? false: !!options.mutable_cursor;
+			options.limit = (options.limit === undefined) ? -1: options.limit | 0;
+
+
 
 			const promises = [];
 			const registered = new Map();
@@ -176,12 +180,13 @@
 				reserved_keys.push(key);
 			}
 
+
 			if ( promises.length <= 0 ) {
 				const p = _op_throttle.push({op: DB_OP.FETCH_ALL_INDEX});
 				promises.push(p);
 				return Promise.all(promises).then((matches)=>{
 					matches = matches[0];
-					const newMatches = [];
+					let newMatches = [];
 										
 					for( let i=0; i < matches.length; i++ ) {
 						let {key, _id} = matches[i];
@@ -193,6 +198,10 @@
 						}
 					}
 
+
+					// INFO: Limit return data amount
+					if( options.limit >= 0 )
+						newMatches = newMatches.slice( 0, options.limit );
 
 					if (!options.mutable_cursor) {
 						return new DBCursor(this, newMatches);
@@ -224,6 +233,10 @@
 					}
 				}
 
+
+				// INFO: Limit return data amount
+				if( options.limit >= 0 )
+					newMatches = newMatches.slice( 0, options.limit );
 
 				if (!options.mutable_cursor) {
 					return new DBCursor(this, newMatches);
